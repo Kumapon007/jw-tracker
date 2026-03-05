@@ -62,14 +62,18 @@ async function testUrl() {
         // mediaアイテムのサンプルを抽出
         const sample = extractSample(parsed);
         output.textContent =
-          '=== 最初のmediaアイテム（サンプル）===\n' +
+          '=== プロキシ生レスポンス（最初の500文字）===\n' +
+          text.slice(0, 500) +
+          '\n\n=== contentsフィールド（最初の500文字）===\n' +
+          (content !== text ? content.slice(0, 500) : '（contentsなし、textを直接使用）') +
+          '\n\n=== 最初のmediaアイテム（サンプル）===\n' +
           JSON.stringify(sample, null, 2) +
-          '\n\n=== フルレスポンス（最初の5000文字）===\n' +
-          JSON.stringify(parsed, null, 2).slice(0, 5000);
+          '\n\n=== フルレスポンス（最初の3000文字）===\n' +
+          JSON.stringify(parsed, null, 2).slice(0, 3000);
         status.textContent = `✅ 成功（プロキシ${i+1}）`;
-      } catch {
-        output.textContent = content.slice(0, 5000);
-        status.textContent = `✅ 取得成功（JSON解析失敗）プロキシ${i+1}`;
+      } catch(parseErr) {
+        output.textContent = '=== JSON解析エラー: ' + parseErr.message + ' ===\n生テキスト:\n' + text.slice(0, 2000);
+        status.textContent = `⚠ 取得成功（JSON解析失敗）プロキシ${i+1}`;
       }
       return;
     } catch(e) {
