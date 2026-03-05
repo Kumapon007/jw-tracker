@@ -374,18 +374,25 @@ async function doFetch(sinceDate) {
         now.getHours()+':'+String(now.getMinutes()).padStart(2,'0')+
         ' 更新（+'+added.length+'件）';
     } else {
-      // 全件モード：全置換
+      // 全件モード
       if (!newItems.length) throw new Error('データが0件です');
+
+      // ビデオAPIが失敗していた場合は既存のビデオを引き継ぐ
+      const videoFailed = videoResult.status !== 'fulfilled' || videoItems.length === 0;
+      const existingVideos = videoFailed ? allItems.filter(i => i.type === 'video') : [];
+
+      const base = [...newItems, ...existingVideos];
       const seen = new Set();
-      const merged = newItems.filter(i=>{ if(seen.has(i.id)) return false; seen.add(i.id); return true; });
+      const merged = base.filter(i=>{ if(seen.has(i.id)) return false; seen.add(i.id); return true; });
       merged.sort((a,b)=>new Date(b.date)-new Date(a.date));
       allItems = merged;
       saveItems();
       localStorage.setItem(TIME_KEY, Date.now());
       const now = new Date();
       const vCnt = merged.filter(i=>i.type==='video').length;
+      const warn = videoFailed ? '⚠ビデオ取得失敗・前回分を保持 ' : '';
       document.getElementById('last-updated').textContent =
-        now.getHours()+':'+String(now.getMinutes()).padStart(2,'0')+
+        warn + now.getHours()+':'+String(now.getMinutes()).padStart(2,'0')+
         ' 全件取得（ビデオ'+vCnt+'件）';
     }
     render();
