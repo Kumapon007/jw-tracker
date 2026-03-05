@@ -108,7 +108,8 @@
 <main>
   <div class="toolbar">
     <div class="btn-group">
-      <button class="refresh-btn" id="refresh-btn"><span id="refresh-icon">🔄</span> 新着を取得</button>
+      <button class="refresh-btn" id="refresh-btn"><span id="refresh-icon">🔄</span> 差分取得</button>
+      <button class="refresh-btn" id="full-refresh-btn" style="background:#555;font-size:0.7rem;padding:6px 10px;">🔃 全件取得</button>
       <button class="add-video-btn" id="toggle-add-btn">＋ 手動追加</button>
       <span class="last-updated" id="last-updated"></span>
     </div>
@@ -205,9 +206,8 @@ function makeVideoUrl(lankKey) {
   return 'https://www.jw.org/finder?srcid=share&wtlocale=J&lank=' + lankKey;
 }
 
-// ── ビデオAPI取得 ──
-async function fetchVideos() {
-  const sixAgo = sixMonthsAgo();
+// ── ビデオAPI取得（sinceDate: これより新しいものだけ、nullなら全件）──
+async function fetchVideos(sinceDate=null) {
   const seen   = new Set();
   const results = [];
 
@@ -225,7 +225,8 @@ async function fetchVideos() {
       const key = m.naturalKey || m.guid;
       if (!key || seen.has(key)) return;
       const dateObj = m.firstPublished ? new Date(m.firstPublished) : null;
-      if (!dateObj || dateObj < sixAgo) return;
+      if (!dateObj) return;
+      if (sinceDate && dateObj < sinceDate) return;
       seen.add(key);
       // languageAgnosticNaturalKey = 言語コードなし版（シェアリンクのlankと同じ）
       const lankKey = m.languageAgnosticNaturalKey || m.naturalKey;
@@ -301,11 +302,14 @@ function parseRSS(xml, isJa) {
   });
 }
 
-async function fetchRSS() {
+async function fetchRSS(sinceDate=null) {
   for (const url of RSS_URLS) {
     try {
       const xml = await fetchViaProxy(url, url.includes('/ja/') ? 'RSS日本語' : 'RSS英語');
-      if (xml.includes('<item')) return parseRSS(xml, url.includes('/ja/'));
+      if (xml.includes('<item')) {
+        const items = parseRSS(xml, url.includes('/ja/'));
+        return sinceDate ? items.filter(it => new Date(it.date) >= sinceDate) : items;
+      }
     } catch {}
   }
   throw new Error('RSS取得失敗');
@@ -326,51 +330,93 @@ function saveRead()  { localStorage.setItem(READ_KEY,  JSON.stringify([...readSe
 function saveItems()  { localStorage.setItem(ITEMS_KEY,  JSON.stringify(allItems)); }
 function saveManual() { localStorage.setItem(MANUAL_KEY, JSON.stringify(manualItems)); }
 
-// ── 全取得 ──
-async function fetchAll() {
-  const btn=document.getElementById('refresh-btn');
-  const icon=document.getElementById('refresh-icon');
-  btn.disabled=true; icon.textContent='⏳';
-  document.getElementById('content-area').innerHTML=
-    '<div class="loading"><div class="spinner"></div><p>jw.org から新着情報を取得中…</p><p class="loading-detail" id="loading-detail"></p></div>';
+// ── 取得共通処理 ──
+async function doFetch(sinceDate) {
+  // sinceDate=null なら全件、Date なら差分
+  const isDiff = sinceDate !== null;
+  const diffBtn = document.getElementById('refresh-btn');
+  const fullBtn = document.getElementById('full-refresh-btn');
+  diffBtn.disabled=true; fullBtn.disabled=true;
+  document.getElementById('refresh-icon').textContent='⏳';
+
+  // キャッシュがあれば画面を保ちつつローディング表示を小さく出す
+  if (!allItems.length) {
+    document.getElementById('content-area').innerHTML=
+      '<div class="loading"><div class="spinner"></div><p>jw.org から情報を取得中…</p><p class="loading-detail" id="loading-detail"></p></div>';
+  } else {
+    setDetail(isDiff ? '差分取得中…' : '全件取得中…');
+  }
 
   try {
-    const [rssResult, videoResult] = await Promise.allSettled([fetchRSS(), fetchVideos()]);
+    const [rssResult, videoResult] = await Promise.allSettled([
+      fetchRSS(sinceDate),
+      fetchVideos(sinceDate)
+    ]);
     const rssItems   = rssResult.status==='fulfilled'   ? rssResult.value   : [];
     const videoItems = videoResult.status==='fulfilled' ? videoResult.value : [];
+    const newItems   = [...videoItems, ...rssItems];
 
-    const seen   = new Set();
-    const merged = [];
-    [...videoItems, ...rssItems].forEach(item => {
-      if (!seen.has(item.id)) {
-        seen.add(item.id); merged.push(item);
+    if (isDiff) {
+      // 差分モード：既存に新着をマージ（IDで重複除去）
+      const existingIds = new Set(allItems.map(i=>i.id));
+      const added = newItems.filter(i => !existingIds.has(i.id));
+      if (added.length === 0) {
+        setDetail('新着なし');
+        setTimeout(()=>setDetail(''), 2000);
+        return;
       }
-    });
-
-    if (!merged.length) throw new Error('データが0件です');
-
-    merged.sort((a,b) => new Date(b.date) - new Date(a.date));
-    allItems = merged;
-    saveItems();
-    localStorage.setItem(TIME_KEY, Date.now());
-
-    const now = new Date();
-    const vCnt = merged.filter(i=>i.type==='video').length;
-    document.getElementById('last-updated').textContent =
-      '最終更新: '+now.getHours()+':'+String(now.getMinutes()).padStart(2,'0')+
-      ' (ビデオ'+vCnt+'件)';
+      allItems = [...added, ...allItems];
+      allItems.sort((a,b)=>new Date(b.date)-new Date(a.date));
+      saveItems();
+      localStorage.setItem(TIME_KEY, Date.now());
+      const now = new Date();
+      document.getElementById('last-updated').textContent =
+        now.getHours()+':'+String(now.getMinutes()).padStart(2,'0')+
+        ' 更新（+'+added.length+'件）';
+    } else {
+      // 全件モード：全置換
+      if (!newItems.length) throw new Error('データが0件です');
+      const seen = new Set();
+      const merged = newItems.filter(i=>{ if(seen.has(i.id)) return false; seen.add(i.id); return true; });
+      merged.sort((a,b)=>new Date(b.date)-new Date(a.date));
+      allItems = merged;
+      saveItems();
+      localStorage.setItem(TIME_KEY, Date.now());
+      const now = new Date();
+      const vCnt = merged.filter(i=>i.type==='video').length;
+      document.getElementById('last-updated').textContent =
+        now.getHours()+':'+String(now.getMinutes()).padStart(2,'0')+
+        ' 全件取得（ビデオ'+vCnt+'件）';
+    }
     render();
 
   } catch(err) {
-    if (allItems.length>0) { render(); document.getElementById('last-updated').textContent='⚠ 取得失敗–キャッシュ表示'; }
-    else {
+    if (allItems.length>0) {
+      render();
+      document.getElementById('last-updated').textContent='⚠ 取得失敗–キャッシュ表示';
+    } else {
       document.getElementById('content-area').innerHTML=
         '<div class="error-box"><strong>⚠️ データを取得できませんでした</strong>'+
-        'インターネット接続を確認し「新着を取得」を押してください。'+
+        '「全件取得」ボタンを押してください。'+
         '<code>'+escHtml(err.message)+'</code></div>';
     }
-  } finally { btn.disabled=false; icon.textContent='🔄'; }
+  } finally {
+    diffBtn.disabled=false; fullBtn.disabled=false;
+    document.getElementById('refresh-icon').textContent='🔄';
+    setDetail('');
+  }
 }
+
+// 差分取得：最後に取得した最新アイテムの日付以降のみ
+function fetchDiff() {
+  const latestDate = allItems.length
+    ? new Date(Math.max(...allItems.map(i=>new Date(i.date))))
+    : null;
+  doFetch(latestDate);
+}
+
+// 全件取得
+function fetchAll() { doFetch(null); }
 
 // ── 描画（イベント委譲方式）──
 function fmtDate(s){const d=new Date(s);return d.getFullYear()+'年'+(d.getMonth()+1)+'月'+d.getDate()+'日';}
@@ -464,7 +510,10 @@ document.querySelectorAll('.filter-btn').forEach(btn=>{
     btn.classList.add('active'); filter=btn.dataset.filter; render();
   });
 });
-document.getElementById('refresh-btn').addEventListener('click', fetchAll);
+document.getElementById('refresh-btn').addEventListener('click', fetchDiff);
+document.getElementById('full-refresh-btn').addEventListener('click', ()=>{
+  if(confirm('全件再取得します。時間がかかります。よろしいですか？')) fetchAll();
+});
 document.getElementById('reset-btn').addEventListener('click',()=>{
   if(confirm('閲覧済みの記録をすべてリセットしますか？')){readSet=new Set();saveRead();render();}
 });
@@ -500,13 +549,22 @@ document.getElementById('do-add-btn').addEventListener('click', () => {
   render();
 });
 
-// ── 初期化 ──
-if (allItems.length>0) {
+// ── 初期化：自動取得なし。キャッシュがあればそのまま表示 ──
+if (allItems.length > 0) {
+  const t = parseInt(localStorage.getItem(TIME_KEY)||'0');
+  if (t) {
+    const d = new Date(t);
+    const today = new Date();
+    const isToday = d.toDateString() === today.toDateString();
+    const time = d.getHours()+':'+String(d.getMinutes()).padStart(2,'0');
+    document.getElementById('last-updated').textContent =
+      isToday ? '今日 '+time+' 取得' : (d.getMonth()+1)+'/'+d.getDate()+' '+time+' 取得';
+  }
   render();
-  const t=parseInt(localStorage.getItem(TIME_KEY)||'0');
-  if(t){const d=new Date(t);document.getElementById('last-updated').textContent='最終更新: '+d.getHours()+':'+String(d.getMinutes()).padStart(2,'0');}
-  if(Date.now()-t>3_600_000) fetchAll();
-} else { fetchAll(); }
+} else {
+  // 初回のみ全件取得
+  fetchAll();
+}
 </script>
 </body>
 </html>
