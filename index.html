@@ -96,116 +96,158 @@
 </main>
 
 <script>
-const READ_KEY  = 'jw_read_v5';
-const ITEMS_KEY = 'jw_items_v5';
-const TIME_KEY  = 'jw_time_v5';
+const READ_KEY  = 'jw_read_v6';
+const ITEMS_KEY = 'jw_items_v6';
+const TIME_KEY  = 'jw_time_v6';
 
-// jw.org 英語版 RSS（確実に存在するURL）
-const FEEDS = [
-  { url:'https://www.jw.org/en/whats-new/rss/WhatsNewWebArticles/feed.xml', type:'article' },
-  { url:'https://www.jw.org/en/whats-new/rss/WhatsNewVideos/feed.xml',       type:'video'   },
+// ── フィード定義 ──
+// 日本語RSSを優先、失敗時は英語RSSにフォールバック
+const FEED_GROUPS = [
+  {
+    type: 'article',
+    urls: [
+      // 日本語版（%エンコード済みパスをそのまま使用）
+      'https://www.jw.org/ja/%E6%96%B0%E7%9D%80%E6%83%85%E5%A0%B1/rss/WhatsNewWebArticles/feed.xml',
+      // 英語版フォールバック
+      'https://www.jw.org/en/whats-new/rss/WhatsNewWebArticles/feed.xml',
+    ]
+  },
+  {
+    type: 'video',
+    urls: [
+      'https://www.jw.org/ja/%E6%96%B0%E7%9D%80%E6%83%85%E5%A0%B1/rss/WhatsNewVideos/feed.xml',
+      'https://www.jw.org/en/whats-new/rss/WhatsNewVideos/feed.xml',
+    ]
+  },
 ];
 
-// CORSプロキシ（正しい形式・複数フォールバック）
-// 各プロキシは { build(url):string, isJson:bool } の形式
-const PROXIES = [
-  { build: u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u), isJson: false },
-  { build: u => 'https://corsproxy.io/?url='          + encodeURIComponent(u), isJson: false },
-  { build: u => 'https://api.allorigins.win/get?url=' + encodeURIComponent(u), isJson: true  },
-  { build: u => 'https://thingproxy.freeboard.io/fetch/' + u,                  isJson: false },
-];
+// ── CORSプロキシ ──
+// allorigins は /raw? でURLをそのまま渡す（再エンコード禁止）
+function makeProxyUrl(targetUrl) {
+  // %記号自体をエンコードしないよう、手動で組み立てる
+  return 'https://api.allorigins.win/raw?url=' + targetUrl.replace(/&/g,'%26');
+}
+function makeProxyUrl2(targetUrl) {
+  return 'https://corsproxy.io/?url=' + targetUrl.replace(/&/g,'%26');
+}
+function makeProxyUrl3(targetUrl) {
+  return 'https://api.allorigins.win/get?url=' + targetUrl.replace(/&/g,'%26');
+}
 
-function sixMonthsAgo(){ const d=new Date(); d.setMonth(d.getMonth()-6); return d; }
+async function tryFetch(proxyUrl) {
+  const res = await fetch(proxyUrl, { cache: 'no-cache' });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const text = await res.text();
+  if (!text || text.trim().length < 50) throw new Error('空レスポンス');
+  // allorigins /get は JSON ラッパー
+  if (text.trim().startsWith('{')) {
+    try { const j = JSON.parse(text); return j.contents || text; } catch {}
+  }
+  return text;
+}
 
-function toJaUrl(url){ return url ? url.replace('www.jw.org/en/','www.jw.org/ja/') : url; }
+// ── 1つのフィードURLを複数プロキシで試す ──
+async function fetchOneUrl(url, label) {
+  const proxies = [makeProxyUrl, makeProxyUrl2, makeProxyUrl3];
+  let lastErr;
+  for (let i = 0; i < proxies.length; i++) {
+    setDetail(label + ` (プロキシ${i+1}/3試行中…)`);
+    try {
+      const xml = await tryFetch(proxies[i](url));
+      if (!xml.includes('<item>') && !xml.includes('<item ')) throw new Error('itemタグなし');
+      return xml;
+    } catch(e) { lastErr = e; }
+  }
+  throw lastErr || new Error('全プロキシ失敗');
+}
 
-// ── 状態 ──
-let readSet  = (()=>{ try{return new Set(JSON.parse(localStorage.getItem(READ_KEY))||[]);}catch{return new Set();} })();
-let allItems = (()=>{ try{return JSON.parse(localStorage.getItem(ITEMS_KEY))||[];}catch{return [];} })();
-let filter   = 'all';
-function saveRead()  { localStorage.setItem(READ_KEY,  JSON.stringify([...readSet])); }
-function saveItems() { localStorage.setItem(ITEMS_KEY, JSON.stringify(allItems)); }
+// ── フィードグループを試す（日本語→英語フォールバック） ──
+async function fetchFeedGroup(group) {
+  let lastErr;
+  for (const url of group.urls) {
+    const isJa = url.includes('/ja/');
+    try {
+      const xml = await fetchOneUrl(url, isJa ? '日本語RSS' : '英語RSS（代替）');
+      return { xml, isJa };
+    } catch(e) { lastErr = e; }
+  }
+  throw lastErr || new Error('フィード取得失敗');
+}
 
-// ── XML パーサ ──
-function parseRSS(xmlText, type){
+// ── XMLパーサ ──
+function parseRSS(xml, type, isJa) {
   const parser = new DOMParser();
-  const doc    = parser.parseFromString(xmlText, 'application/xml');
-  if(doc.querySelector('parsererror')) throw new Error('XMLパースエラー');
+  const doc = parser.parseFromString(xml, 'application/xml');
+  if (doc.querySelector('parsererror')) throw new Error('XMLパースエラー');
   const items = [...doc.querySelectorAll('item')];
-  if(items.length === 0) throw new Error('アイテム0件');
+  if (!items.length) throw new Error('アイテム0件');
+
   return items.map(el => {
     const rawTitle = el.querySelector('title')?.textContent?.trim() || '（タイトルなし）';
     const rawLink  = el.querySelector('link')?.textContent?.trim()
                   || el.querySelector('guid')?.textContent?.trim() || '';
     const pubDate  = el.querySelector('pubDate')?.textContent?.trim() || '';
     const dateObj  = pubDate ? new Date(pubDate) : new Date();
-    const dateStr  = [dateObj.getFullYear(), String(dateObj.getMonth()+1).padStart(2,'0'), String(dateObj.getDate()).padStart(2,'0')].join('-');
+    const dateStr  = dateObj.getFullYear() + '-' +
+                     String(dateObj.getMonth()+1).padStart(2,'0') + '-' +
+                     String(dateObj.getDate()).padStart(2,'0');
+
+    // 「CATEGORY | Title」形式を分割
     const parts    = rawTitle.split(' | ');
     const category = parts.length > 1 ? parts[0] : '';
     const title    = parts.length > 1 ? parts.slice(1).join(' | ') : rawTitle;
-    return { id: rawLink||rawTitle, title, category, url: toJaUrl(rawLink), date: dateStr, dateObj, type };
+
+    // 英語版URLを日本語版に変換（フォールバック時）
+    const url = (!isJa && rawLink)
+      ? rawLink.replace('https://www.jw.org/en/', 'https://www.jw.org/ja/')
+      : rawLink;
+
+    return { id: rawLink || rawTitle, title, category, url, date: dateStr, dateObj, type };
   });
 }
 
-// ── プロキシ経由フェッチ ──
-async function fetchViaProxy(feedUrl){
-  const errors = [];
-  for(let i=0; i<PROXIES.length; i++){
-    const p = PROXIES[i];
-    const proxyUrl = p.build(feedUrl);
-    document.getElementById('loading-detail').textContent = `プロキシ ${i+1}/${PROXIES.length} を試行中…`;
-    try{
-      const res = await fetch(proxyUrl, { cache:'no-cache' });
-      if(!res.ok) throw new Error('HTTP '+res.status);
-      const text = await res.text();
-      if(!text || text.trim().length < 30) throw new Error('空のレスポンス');
-      // JSON ラッパーの場合
-      let xmlText = text;
-      if(p.isJson || text.trim().startsWith('{')){
-        try{ const j=JSON.parse(text); xmlText = j.contents || j.data || text; }catch{}
-      }
-      if(!xmlText.includes('<item')) throw new Error('XMLが含まれていない');
-      return xmlText;
-    } catch(e){
-      errors.push(`プロキシ${i+1}: ${e.message}`);
-    }
-  }
-  throw new Error('全プロキシ失敗\n' + errors.join('\n'));
-}
+function sixMonthsAgo() { const d=new Date(); d.setMonth(d.getMonth()-6); return d; }
+function setDetail(t) { const el=document.getElementById('loading-detail'); if(el) el.textContent=t; }
+
+// ── 状態 ──
+let readSet  = (()=>{ try{return new Set(JSON.parse(localStorage.getItem(READ_KEY))||[]);}catch{return new Set();}})();
+let allItems = (()=>{ try{return JSON.parse(localStorage.getItem(ITEMS_KEY))||[];}catch{return [];}})();
+let filter   = 'all';
+function saveRead()  { localStorage.setItem(READ_KEY,  JSON.stringify([...readSet])); }
+function saveItems() { localStorage.setItem(ITEMS_KEY, JSON.stringify(allItems)); }
 
 // ── 全フィード取得 ──
-async function fetchAll(){
-  const btn  = document.getElementById('refresh-btn');
-  const icon = document.getElementById('refresh-icon');
-  btn.disabled = true; icon.textContent = '⏳';
-  document.getElementById('content-area').innerHTML =
+async function fetchAll() {
+  const btn=document.getElementById('refresh-btn');
+  const icon=document.getElementById('refresh-icon');
+  btn.disabled=true; icon.textContent='⏳';
+  document.getElementById('content-area').innerHTML=
     '<div class="loading"><div class="spinner"></div><p>jw.org から新着情報を取得中…</p><p class="loading-detail" id="loading-detail"></p></div>';
 
-  try{
+  try {
     const results = await Promise.allSettled(
-      FEEDS.map(async feed => {
-        const xml = await fetchViaProxy(feed.url);
-        return parseRSS(xml, feed.type);
+      FEED_GROUPS.map(async group => {
+        const { xml, isJa } = await fetchFeedGroup(group);
+        return parseRSS(xml, group.type, isJa);
       })
     );
 
     const cutoff = sixMonthsAgo();
     const seen   = new Set();
     const merged = [];
-    const errs   = [];
 
-    results.forEach((r,i) => {
-      if(r.status==='fulfilled'){
+    results.forEach(r => {
+      if (r.status==='fulfilled') {
         r.value.forEach(item => {
-          if(!seen.has(item.id) && item.dateObj >= cutoff){ seen.add(item.id); merged.push(item); }
+          if (!seen.has(item.id) && item.dateObj >= cutoff) {
+            seen.add(item.id); merged.push(item);
+          }
         });
-      } else {
-        errs.push(`フィード${i+1}: ${r.reason?.message}`);
       }
     });
 
-    if(results.every(r=>r.status==='rejected')){
-      throw new Error(errs.join('\n'));
+    if (results.every(r=>r.status==='rejected')) {
+      throw new Error(results.map(r=>r.reason?.message).filter(Boolean).join('\n'));
     }
 
     merged.sort((a,b) => b.dateObj - a.dateObj);
@@ -213,49 +255,36 @@ async function fetchAll(){
     saveItems();
     localStorage.setItem(TIME_KEY, Date.now());
 
-    const now = new Date();
+    const now=new Date();
+    const failCount = results.filter(r=>r.status==='rejected').length;
     document.getElementById('last-updated').textContent =
-      '最終更新: '+now.getHours()+':'+String(now.getMinutes()).padStart(2,'0');
-
-    // 一部失敗でも警告表示
-    if(errs.length > 0 && errs.length < FEEDS.length){
-      document.getElementById('last-updated').textContent += ' ⚠一部取得失敗';
-    }
+      '最終更新: '+now.getHours()+':'+String(now.getMinutes()).padStart(2,'0') +
+      (failCount > 0 ? ' ⚠一部取得失敗' : '');
     render();
 
-  } catch(err){
-    if(allItems.length > 0){
+  } catch(err) {
+    if (allItems.length > 0) {
       render();
       document.getElementById('last-updated').textContent = '⚠ 取得失敗 – キャッシュ表示中';
     } else {
       document.getElementById('content-area').innerHTML =
-        '<div class="error-box">' +
-          '<strong>⚠️ データを取得できませんでした</strong>' +
-          'インターネット接続を確認し「新着を取得」を押してください。<br>' +
-          '（しばらく時間をおいてから再試行すると解決することがあります）' +
-          '<code>'+escHtml(err.message)+'</code>' +
-        '</div>';
+        '<div class="error-box"><strong>⚠️ データを取得できませんでした</strong>' +
+        'インターネット接続を確認し「新着を取得」を押してください。' +
+        '<code>'+escHtml(err.message)+'</code></div>';
     }
   } finally {
     btn.disabled=false; icon.textContent='🔄';
-    const detail=document.getElementById('loading-detail');
-    if(detail) detail.textContent='';
   }
 }
 
 // ── 描画 ──
-function fmtDate(s){
-  const d=new Date(s); return d.getFullYear()+'年'+(d.getMonth()+1)+'月'+d.getDate()+'日';
-}
-function escHtml(s){
-  return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
+function fmtDate(s){ const d=new Date(s); return d.getFullYear()+'年'+(d.getMonth()+1)+'月'+d.getDate()+'日'; }
+function escHtml(s){ return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
 function render(){
-  const area   = document.getElementById('content-area');
-  const cutoff = sixMonthsAgo();
-  let items = allItems.filter(it => new Date(it.date) >= cutoff);
-
+  const area=document.getElementById('content-area');
+  const cutoff=sixMonthsAgo();
+  let items=allItems.filter(it=>new Date(it.date)>=cutoff);
   if     (filter==='unread')  items=items.filter(it=>!readSet.has(it.id));
   else if(filter==='read')    items=items.filter(it=> readSet.has(it.id));
   else if(filter==='video')   items=items.filter(it=>it.type==='video');
@@ -284,18 +313,16 @@ function render(){
       const idJ=JSON.stringify(it.id);
       html+=
         '<div class="item '+(isRead?'read':'')+'">' +
-          '<div class="item-inner">' +
-            '<span class="type-badge '+bC+'">'+bL+'</span>' +
-            '<div class="item-body">' +
-              '<a href="'+escHtml(it.url)+'" class="item-title" target="_blank" onclick="markRead('+idJ+')">'+escHtml(it.title)+'</a>' +
-              (it.category?'<div class="item-category">'+escHtml(it.category)+'</div>':'') +
-            '</div>' +
-            '<div class="item-actions">' +
-              (isRead?'<span class="read-badge">閲覧済み</span>':'') +
-              '<button class="toggle-btn" onclick="toggleRead('+idJ+')">'+(isRead?'未読に戻す':'閲覧済みに')+'</button>' +
-            '</div>' +
-          '</div>' +
-        '</div>';
+        '<div class="item-inner">' +
+        '<span class="type-badge '+bC+'">'+bL+'</span>' +
+        '<div class="item-body">' +
+        '<a href="'+escHtml(it.url)+'" class="item-title" target="_blank" onclick="markRead('+idJ+')">'+escHtml(it.title)+'</a>' +
+        (it.category?'<div class="item-category">'+escHtml(it.category)+'</div>':'') +
+        '</div>' +
+        '<div class="item-actions">' +
+        (isRead?'<span class="read-badge">閲覧済み</span>':'') +
+        '<button class="toggle-btn" onclick="toggleRead('+idJ+')">'+(isRead?'未読に戻す':'閲覧済みに')+'</button>' +
+        '</div></div></div>';
     });
   });
   area.innerHTML=html;
@@ -316,14 +343,12 @@ document.getElementById('reset-btn').addEventListener('click',()=>{
 });
 
 // ── 初期化 ──
-if(allItems.length > 0){
+if(allItems.length>0){
   render();
   const t=parseInt(localStorage.getItem(TIME_KEY)||'0');
   if(t){ const d=new Date(t); document.getElementById('last-updated').textContent='最終更新: '+d.getHours()+':'+String(d.getMinutes()).padStart(2,'0'); }
-  if(Date.now()-t > 3_600_000) fetchAll();
-} else {
-  fetchAll();
-}
+  if(Date.now()-t>3_600_000) fetchAll();
+} else { fetchAll(); }
 </script>
 </body>
 </html>
