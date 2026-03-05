@@ -58,9 +58,9 @@
   .item.read .item-title{color:var(--read-color);text-decoration:line-through;text-decoration-color:var(--read-color);}
   .item-title:hover{color:var(--accent2);}
   .item-category{font-size:0.66rem;color:var(--text-muted);margin-top:2px;}
+  .item-duration{font-size:0.63rem;color:var(--text-muted);margin-top:2px;}
   .item-actions{display:flex;align-items:center;gap:6px;flex-shrink:0;}
   .read-badge{font-size:0.63rem;color:var(--read-color);background:rgba(160,152,144,0.12);border:1px solid var(--read-color);border-radius:4px;padding:2px 6px;white-space:nowrap;}
-  /* ボタンにdata属性でIDを持たせる */
   .toggle-btn{background:none;border:1px solid var(--border);border-radius:6px;padding:3px 7px;cursor:pointer;font-size:0.63rem;color:var(--text-muted);font-family:'Noto Sans JP',sans-serif;transition:all 0.18s;white-space:nowrap;}
   .toggle-btn:hover{border-color:var(--accent);color:var(--accent);}
   .empty-state{text-align:center;padding:45px 20px;color:var(--text-muted);font-size:0.85rem;line-height:1.8;}
@@ -104,22 +104,30 @@
 </main>
 
 <script>
-const READ_KEY  = 'jw_read_v10';
-const ITEMS_KEY = 'jw_items_v10';
-const TIME_KEY  = 'jw_time_v10';
+const READ_KEY  = 'jw_read_v11';
+const ITEMS_KEY = 'jw_items_v11';
+const TIME_KEY  = 'jw_time_v11';
 
-// ── RSS（記事・雑誌・音楽・書籍）──
 const RSS_URLS = [
   'https://www.jw.org/ja/%E6%96%B0%E7%9D%80%E6%83%85%E5%A0%B1/rss/WhatsNewWebArticles/feed.xml',
   'https://www.jw.org/en/whats-new/rss/WhatsNewWebArticles/feed.xml',
 ];
 
-// ── ビデオAPI ──
-// VODStudio の subcategories を全取得するため、まずトップカテゴリを取得し
-// 各サブカテゴリを個別に取得する（detailed=1でも全件入らない場合があるため）
-const VIDEO_BASE = 'https://data.jw-api.org/mediator/v1/categories/J/';
+// ビデオAPIのベースURL（言語コードJ = 日本語）
+const VIDEO_API_BASE = 'https://data.jw-api.org/mediator/v1/categories/J/';
+// 取得するサブカテゴリ一覧（VODStudioのサブカテゴリ）
+const VIDEO_SUBCATS = [
+  'VODStudio',           // 全体（おすすめ等含む）
+  'StudioMonthlyPrograms',
+  'StudioTalks',
+  'StudioDramaAndMovies',
+  'StudioDocumentaries',
+  'StudioAudioDrama',
+  'StudioMusicVideos',
+  'StudioInternational',
+];
 
-// ── CORSプロキシ ──
+// CORSプロキシ（URLを再エンコードしない）
 const PROXIES = [
   u => 'https://api.allorigins.win/raw?url=' + u,
   u => 'https://corsproxy.io/?url=' + u,
@@ -140,60 +148,62 @@ async function fetchViaProxy(targetUrl, label) {
       return text;
     } catch {}
   }
-  throw new Error((label||targetUrl) + ': 全プロキシ失敗');
+  throw new Error((label || targetUrl) + ': 全プロキシ失敗');
 }
 
-// ── ビデオ: finder URLを生成（naturalKeyをlankパラメータに使用）──
+// ── ビデオURLを生成 ──
+// naturalKey（例: "pub-jwb-135_J_1_VIDEO"）をそのままlankパラメータに使う
 function makeVideoUrl(naturalKey) {
   if (!naturalKey) return 'https://www.jw.org/ja/%E3%83%A9%E3%82%A4%E3%83%96%E3%83%A9%E3%83%AA%E3%83%BC/%E3%83%93%E3%83%87%E3%82%AA/';
-  return 'https://www.jw.org/finder?wtlocale=J&lank=' + encodeURIComponent(naturalKey);
+  return 'https://www.jw.org/finder?wtlocale=J&lank=' + naturalKey;
 }
 
-// ── ビデオAPI取得（サブカテゴリを順に取得）──
+// ── ビデオAPI取得 ──
 async function fetchVideos() {
   const sixAgo = sixMonthsAgo();
+  const seen   = new Set();
   const results = [];
 
-  // まずVODStudio全体を取得（サブカテゴリ一覧を得る）
-  let topJson;
+  // まずVODStudio全体をdetailed=1で取得（サブカテゴリのmedia含む）
+  let topData = null;
   try {
-    const text = await fetchViaProxy(VIDEO_BASE + 'VODStudio?detailed=1', 'ビデオ一覧');
-    topJson = JSON.parse(text);
+    const text = await fetchViaProxy(VIDEO_API_BASE + 'VODStudio?detailed=1', 'ビデオ一覧');
+    topData = JSON.parse(text);
   } catch(e) {
     throw new Error('ビデオAPI取得失敗: ' + e.message);
   }
 
-  const cat = topJson.category;
-  if (!cat) throw new Error('ビデオAPIレスポンス形式エラー');
-
-  // detailed=1で返ってきたmediaを直接処理
-  function extractMedia(c, catName) {
+  function extractMedia(c) {
     (c.media || []).forEach(m => {
+      const key = m.naturalKey || m.guid;
+      if (!key || seen.has(key)) return;
       const dateObj = m.firstPublished ? new Date(m.firstPublished) : null;
       if (!dateObj || dateObj < sixAgo) return;
+      seen.add(key);
       results.push({
-        id:       'vid_' + (m.naturalKey || m.title),
+        id:       'vid_' + key,
         title:    m.title || '（タイトルなし）',
-        category: catName || c.name || 'ビデオ',
-        url:      makeVideoUrl(m.naturalKey),
+        category: c.name || 'ビデオ',
+        url:      makeVideoUrl(m.naturalKey),   // naturalKey をそのまま使用
+        duration: m.durationFormattedHHMM || '',
         date:     toDateStr(dateObj),
         dateObj,
         type:     'video',
       });
     });
-    (c.subcategories || []).forEach(sub => extractMedia(sub, sub.name));
+    (c.subcategories || []).forEach(extractMedia);
   }
 
-  extractMedia(cat, cat.name);
+  if (topData.category) extractMedia(topData.category);
 
-  // サブカテゴリを個別に再取得して追加（detailed=1でも省略される場合がある）
-  const subKeys = (cat.subcategories || []).map(s => s.key).filter(Boolean);
+  // サブカテゴリを個別取得して補完
+  const subKeys = (topData.category?.subcategories || []).map(s => s.key).filter(Boolean);
   for (const key of subKeys) {
+    setDetail(`ビデオ「${key}」補完取得中…`);
     try {
-      setDetail(`ビデオ「${key}」取得中…`);
-      const text = await fetchViaProxy(VIDEO_BASE + key + '?detailed=1', key);
+      const text = await fetchViaProxy(VIDEO_API_BASE + key + '?detailed=1', key);
       const json = JSON.parse(text);
-      if (json.category) extractMedia(json.category, json.category.name);
+      if (json.category) extractMedia(json.category);
     } catch {}
   }
 
@@ -228,7 +238,7 @@ function parseRSS(xml, isJa) {
     const cat      = sep > -1 ? rawTitle.slice(0, sep) : '';
     const title    = sep > -1 ? rawTitle.slice(sep+3) : rawTitle;
     const url      = (!isJa && rawLink) ? rawLink.replace('www.jw.org/en/','www.jw.org/ja/') : rawLink;
-    return { id: rawLink||rawTitle, title, category: cat, url, date: toDateStr(dateObj), dateObj, type: classifyType(cat,url) };
+    return { id: rawLink||rawTitle, title, category: cat, url, duration: '', date: toDateStr(dateObj), dateObj, type: classifyType(cat,url) };
   });
 }
 
@@ -279,7 +289,7 @@ async function fetchAll() {
 
     if (!merged.length) throw new Error('データが0件です');
 
-    merged.sort((a,b) => new Date(b.date)-new Date(a.date));
+    merged.sort((a,b) => new Date(b.date) - new Date(a.date));
     allItems = merged;
     saveItems();
     localStorage.setItem(TIME_KEY, Date.now());
@@ -302,7 +312,7 @@ async function fetchAll() {
   } finally { btn.disabled=false; icon.textContent='🔄'; }
 }
 
-// ── 描画（onclick排除・data属性方式）──
+// ── 描画（イベント委譲方式）──
 function fmtDate(s){const d=new Date(s);return d.getFullYear()+'年'+(d.getMonth()+1)+'月'+d.getDate()+'日';}
 function escHtml(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
@@ -329,7 +339,6 @@ function render() {
   const groups={};
   items.forEach(it=>{ (groups[it.date]=groups[it.date]||[]).push(it); });
 
-  // HTMLを組み立て（onclickは使わずdata-id属性を使う）
   let html='';
   Object.keys(groups).sort((a,b)=>new Date(b)-new Date(a)).forEach(date=>{
     html+='<div class="date-header">'+fmtDate(date)+'更新</div>';
@@ -337,8 +346,7 @@ function render() {
       const isRead=readSet.has(it.id);
       const bC=TYPE_BADGE[it.type]||'badge-other';
       const bL=TYPE_LABEL[it.type]||'その他';
-      // data-id属性にIDを格納（JSエスケープ不要）
-      const safeId = escHtml(it.id);
+      const safeId=escHtml(it.id);
       html+=
         '<div class="item '+(isRead?'read':'')+'" data-id="'+safeId+'">'+
         '<div class="item-inner">'+
@@ -346,6 +354,7 @@ function render() {
         '<div class="item-body">'+
         '<a href="'+escHtml(it.url)+'" class="item-title js-title" target="_blank" data-id="'+safeId+'">'+escHtml(it.title)+'</a>'+
         (it.category?'<div class="item-category">'+escHtml(it.category)+'</div>':'')+
+        (it.duration?'<div class="item-duration">⏱ '+escHtml(it.duration)+'</div>':'')+
         '</div>'+
         '<div class="item-actions">'+
         (isRead?'<span class="read-badge">閲覧済み</span>':'')+
@@ -354,34 +363,22 @@ function render() {
     });
   });
   area.innerHTML = html;
-
-  // イベントリスナーをコンテナに一括登録（イベント委譲）
   area.addEventListener('click', handleClick);
 }
 
-// イベント委譲ハンドラ
 function handleClick(e) {
-  // タイトルリンク → 閲覧済みにする（リンク自体のナビゲーションは妨げない）
   const title = e.target.closest('.js-title');
   if (title) {
     const id = title.dataset.id;
-    if (id) { readSet.add(id); saveRead(); scheduleRender(); }
-    return; // リンクのデフォルト動作は維持
+    if (id) { readSet.add(id); saveRead(); setTimeout(render, 300); }
+    return;
   }
-  // 閲覧済みボタン
   const toggle = e.target.closest('.js-toggle');
   if (toggle) {
     e.preventDefault();
     const id = toggle.dataset.id;
     if (id) { readSet.has(id)?readSet.delete(id):readSet.add(id); saveRead(); render(); }
   }
-}
-
-// タイトルクリック後、ページ離脱前に少し遅らせて再描画
-let renderTimer = null;
-function scheduleRender() {
-  clearTimeout(renderTimer);
-  renderTimer = setTimeout(render, 300);
 }
 
 document.querySelectorAll('.filter-btn').forEach(btn=>{
