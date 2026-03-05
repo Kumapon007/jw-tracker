@@ -20,6 +20,7 @@
   <p style="color:#aaa;margin-bottom:6px">テストするAPIのURL：</p>
   <input type="text" id="api-url" value="https://data.jw-api.org/mediator/v1/categories/J/VODStudio?detailed=1">
   <button onclick="testUrl()">このURLを取得</button>
+  <button id="dl-btn" onclick="downloadTxt()" style="display:none;background:#c8a84b;color:#3a2800;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-size:14px;margin-left:8px;">📥 TXTでダウンロード</button>
 </div>
 
 <div class="status" id="status">ボタンを押してAPIを取得してください</div>
@@ -71,6 +72,7 @@ async function testUrl() {
           '\n\n=== フルレスポンス（最初の3000文字）===\n' +
           JSON.stringify(parsed, null, 2).slice(0, 3000);
         status.textContent = `✅ 成功（プロキシ${i+1}）`;
+        document.getElementById('dl-btn').style.display = 'inline-block';
       } catch(parseErr) {
         output.textContent = '=== JSON解析エラー: ' + parseErr.message + ' ===\n生テキスト:\n' + text.slice(0, 2000);
         status.textContent = `⚠ 取得成功（JSON解析失敗）プロキシ${i+1}`;
@@ -105,6 +107,15 @@ function extractSample(json) {
   }
   walk(json, 0);
   return results.slice(0, 3); // 最初の3カテゴリのみ
+}
+
+function downloadTxt() {
+  const text = document.getElementById('output').textContent;
+  const blob = new Blob([text], {type: 'text/plain;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'jw_api_result.txt';
+  a.click();
 }
 </script>
 </body>
