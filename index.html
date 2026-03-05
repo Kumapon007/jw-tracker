@@ -60,10 +60,10 @@
   .item-category{font-size:0.66rem;color:var(--text-muted);margin-top:2px;}
   .item-actions{display:flex;align-items:center;gap:6px;flex-shrink:0;}
   .read-badge{font-size:0.63rem;color:var(--read-color);background:rgba(160,152,144,0.12);border:1px solid var(--read-color);border-radius:4px;padding:2px 6px;white-space:nowrap;}
+  /* ボタンにdata属性でIDを持たせる */
   .toggle-btn{background:none;border:1px solid var(--border);border-radius:6px;padding:3px 7px;cursor:pointer;font-size:0.63rem;color:var(--text-muted);font-family:'Noto Sans JP',sans-serif;transition:all 0.18s;white-space:nowrap;}
   .toggle-btn:hover{border-color:var(--accent);color:var(--accent);}
   .empty-state{text-align:center;padding:45px 20px;color:var(--text-muted);font-size:0.85rem;line-height:1.8;}
-  .source-tag{font-size:0.6rem;color:#aaa;margin-left:4px;}
   @keyframes fadeIn{from{opacity:0;transform:translateY(5px);}to{opacity:1;transform:translateY(0);}}
   ::-webkit-scrollbar{width:5px;}
   ::-webkit-scrollbar-track{background:var(--bg);}
@@ -104,24 +104,22 @@
 </main>
 
 <script>
-const READ_KEY  = 'jw_read_v9';
-const ITEMS_KEY = 'jw_items_v9';
-const TIME_KEY  = 'jw_time_v9';
+const READ_KEY  = 'jw_read_v10';
+const ITEMS_KEY = 'jw_items_v10';
+const TIME_KEY  = 'jw_time_v10';
 
-// ── RSS フィード（記事・雑誌・音楽・書籍）──
+// ── RSS（記事・雑誌・音楽・書籍）──
 const RSS_URLS = [
   'https://www.jw.org/ja/%E6%96%B0%E7%9D%80%E6%83%85%E5%A0%B1/rss/WhatsNewWebArticles/feed.xml',
   'https://www.jw.org/en/whats-new/rss/WhatsNewWebArticles/feed.xml',
 ];
 
-// ── JW Media API（ビデオ）──
-// data.jw-api.org/mediator/v1/categories/{言語}/{カテゴリ}?detailed=1
-// 日本語コード = J、VODStudio = JW Broadcasting
-const VIDEO_API_URLS = [
-  'https://data.jw-api.org/mediator/v1/categories/J/VODStudio?detailed=1',
-];
+// ── ビデオAPI ──
+// VODStudio の subcategories を全取得するため、まずトップカテゴリを取得し
+// 各サブカテゴリを個別に取得する（detailed=1でも全件入らない場合があるため）
+const VIDEO_BASE = 'https://data.jw-api.org/mediator/v1/categories/J/';
 
-// ── CORSプロキシ（URLを再エンコードしない）──
+// ── CORSプロキシ ──
 const PROXIES = [
   u => 'https://api.allorigins.win/raw?url=' + u,
   u => 'https://corsproxy.io/?url=' + u,
@@ -130,20 +128,76 @@ const PROXIES = [
 
 async function fetchViaProxy(targetUrl, label) {
   for (let i = 0; i < PROXIES.length; i++) {
-    setDetail(label + `（プロキシ${i+1}/3）`);
+    setDetail((label||'') + `（プロキシ${i+1}/3）`);
     try {
       const res = await fetch(PROXIES[i](targetUrl), { cache: 'no-cache' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const text = await res.text();
-      if (!text || text.length < 10) throw new Error('空');
-      // JSONラッパー解除
+      if (!text || text.length < 5) throw new Error('空');
       if (text.trim().startsWith('{')) {
         try { const j = JSON.parse(text); return j.contents || text; } catch {}
       }
       return text;
-    } catch(e) { /* 次を試す */ }
+    } catch {}
   }
-  throw new Error(label + ': 全プロキシ失敗');
+  throw new Error((label||targetUrl) + ': 全プロキシ失敗');
+}
+
+// ── ビデオ: finder URLを生成（naturalKeyをlankパラメータに使用）──
+function makeVideoUrl(naturalKey) {
+  if (!naturalKey) return 'https://www.jw.org/ja/%E3%83%A9%E3%82%A4%E3%83%96%E3%83%A9%E3%83%AA%E3%83%BC/%E3%83%93%E3%83%87%E3%82%AA/';
+  return 'https://www.jw.org/finder?wtlocale=J&lank=' + encodeURIComponent(naturalKey);
+}
+
+// ── ビデオAPI取得（サブカテゴリを順に取得）──
+async function fetchVideos() {
+  const sixAgo = sixMonthsAgo();
+  const results = [];
+
+  // まずVODStudio全体を取得（サブカテゴリ一覧を得る）
+  let topJson;
+  try {
+    const text = await fetchViaProxy(VIDEO_BASE + 'VODStudio?detailed=1', 'ビデオ一覧');
+    topJson = JSON.parse(text);
+  } catch(e) {
+    throw new Error('ビデオAPI取得失敗: ' + e.message);
+  }
+
+  const cat = topJson.category;
+  if (!cat) throw new Error('ビデオAPIレスポンス形式エラー');
+
+  // detailed=1で返ってきたmediaを直接処理
+  function extractMedia(c, catName) {
+    (c.media || []).forEach(m => {
+      const dateObj = m.firstPublished ? new Date(m.firstPublished) : null;
+      if (!dateObj || dateObj < sixAgo) return;
+      results.push({
+        id:       'vid_' + (m.naturalKey || m.title),
+        title:    m.title || '（タイトルなし）',
+        category: catName || c.name || 'ビデオ',
+        url:      makeVideoUrl(m.naturalKey),
+        date:     toDateStr(dateObj),
+        dateObj,
+        type:     'video',
+      });
+    });
+    (c.subcategories || []).forEach(sub => extractMedia(sub, sub.name));
+  }
+
+  extractMedia(cat, cat.name);
+
+  // サブカテゴリを個別に再取得して追加（detailed=1でも省略される場合がある）
+  const subKeys = (cat.subcategories || []).map(s => s.key).filter(Boolean);
+  for (const key of subKeys) {
+    try {
+      setDetail(`ビデオ「${key}」取得中…`);
+      const text = await fetchViaProxy(VIDEO_BASE + key + '?detailed=1', key);
+      const json = JSON.parse(text);
+      if (json.category) extractMedia(json.category, json.category.name);
+    } catch {}
+  }
+
+  return results;
 }
 
 // ── RSS パーサ ──
@@ -152,13 +206,12 @@ const TYPE_BADGE = { video:'badge-video', article:'badge-article', magazine:'bad
 
 function classifyType(cat, url) {
   const c = (cat||'').toUpperCase(), u = (url||'').toLowerCase();
-  if (c.includes('SONG')||c.includes('音楽')||c.includes('MUSIC')||u.includes('/music-songs/')) return 'song';
+  if (c.includes('SONG')||c.includes('音楽')||u.includes('/music-songs/')) return 'song';
   if (c.includes('VIDEO')||c.includes('ビデオ')||c.includes('DRAMA')||u.includes('/videos/')||u.includes('/drama/')) return 'video';
   if (c.includes('WATCHTOWER')||c.includes('ものみの塔')||c.includes('AWAKE')||c.includes('目ざめよ')||
       c.includes('MEETING WORKBOOK')||c.includes('集会テキスト')||u.includes('mwb')||u.includes('/watchtower')||u.includes('/awake')) return 'magazine';
   if (c.includes('BROCHURE')||c.includes('BOOKLET')||c.includes('BOOK')||u.includes('/books/')||u.includes('/brochures/')) return 'book';
-  if (c.includes('NEWS')||c.includes('ニュース')||c.includes('KEEP ON THE WATCH')||u.includes('/news/')||u.includes('/library/')) return 'article';
-  return 'other';
+  return 'article';
 }
 
 function parseRSS(xml, isJa) {
@@ -171,213 +224,183 @@ function parseRSS(xml, isJa) {
     const rawLink  = (el.querySelector('link')?.textContent||el.querySelector('guid')?.textContent||'').trim();
     const pub      = (el.querySelector('pubDate')?.textContent||'').trim();
     const dateObj  = pub ? new Date(pub) : new Date();
-    const dateStr  = toDateStr(dateObj);
     const sep      = rawTitle.indexOf(' | ');
     const cat      = sep > -1 ? rawTitle.slice(0, sep) : '';
     const title    = sep > -1 ? rawTitle.slice(sep+3) : rawTitle;
     const url      = (!isJa && rawLink) ? rawLink.replace('www.jw.org/en/','www.jw.org/ja/') : rawLink;
-    return { id: rawLink||rawTitle, title, category: cat, url, date: dateStr, dateObj, type: classifyType(cat, url), src:'rss' };
+    return { id: rawLink||rawTitle, title, category: cat, url, date: toDateStr(dateObj), dateObj, type: classifyType(cat,url) };
   });
 }
 
-// ── JW Media API パーサ ──
-// レスポンス: { category: { subcategories: [ { name, key, media: [ { title, naturalKey, firstPublished } ] } ] } }
-function parseVideoApi(json) {
-  const items = [];
-  const sixAgo = sixMonthsAgo();
-  const cat = json.category;
-  if (!cat) return items;
-
-  // subcategories を再帰的に処理
-  function processCategory(c) {
-    (c.media || []).forEach(m => {
-      const dateObj = m.firstPublished ? new Date(m.firstPublished) : new Date();
-      if (dateObj < sixAgo) return;
-      const naturalKey = m.naturalKey || '';
-      const url = naturalKey
-        ? `https://www.jw.org/ja/${encodeURIComponent('ライブラリー')}/${encodeURIComponent('ビデオ')}/#ja/mediaitems/${c.key||'VODStudio'}/${naturalKey}`
-        : 'https://www.jw.org/ja/%E3%83%A9%E3%82%A4%E3%83%96%E3%83%A9%E3%83%AA%E3%83%BC/%E3%83%93%E3%83%87%E3%82%AA/';
-      items.push({
-        id: 'video_' + (m.naturalKey || m.title),
-        title: m.title || '（タイトルなし）',
-        category: c.name || 'ビデオ',
-        url,
-        date: toDateStr(dateObj),
-        dateObj,
-        type: 'video',
-        src: 'api'
-      });
-    });
-    (c.subcategories || []).forEach(processCategory);
-  }
-
-  processCategory(cat);
-  return items;
-}
-
-function toDateStr(d) {
-  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-}
-function sixMonthsAgo() { const d = new Date(); d.setMonth(d.getMonth()-6); return d; }
-function setDetail(t) { const el = document.getElementById('loading-detail'); if(el) el.textContent = t; }
-
-// ── 状態 ──
-let readSet  = (()=>{ try{return new Set(JSON.parse(localStorage.getItem(READ_KEY))||[]);}catch{return new Set();}})();
-let allItems = (()=>{ try{return JSON.parse(localStorage.getItem(ITEMS_KEY))||[];}catch{return [];}})();
-let filter   = 'all';
-function saveRead()  { localStorage.setItem(READ_KEY,  JSON.stringify([...readSet])); }
-function saveItems() { localStorage.setItem(ITEMS_KEY, JSON.stringify(allItems)); }
-
-// ── RSS取得 ──
 async function fetchRSS() {
   for (const url of RSS_URLS) {
     try {
-      const xml = await fetchViaProxy(url, url.includes('/ja/') ? '記事RSS(日本語)' : '記事RSS(英語)');
+      const xml = await fetchViaProxy(url, url.includes('/ja/') ? 'RSS日本語' : 'RSS英語');
       if (xml.includes('<item')) return parseRSS(xml, url.includes('/ja/'));
     } catch {}
   }
   throw new Error('RSS取得失敗');
 }
 
-// ── ビデオAPI取得 ──
-async function fetchVideos() {
-  for (const url of VIDEO_API_URLS) {
-    try {
-      const text = await fetchViaProxy(url, 'ビデオAPI');
-      const json = JSON.parse(text);
-      const items = parseVideoApi(json);
-      if (items.length > 0) return items;
-    } catch {}
-  }
-  return []; // ビデオ取得失敗は致命的でないので空配列を返す
+function toDateStr(d) {
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
+function sixMonthsAgo() { const d=new Date(); d.setMonth(d.getMonth()-6); return d; }
+function setDetail(t) { const el=document.getElementById('loading-detail'); if(el) el.textContent=t; }
+
+// ── 状態 ──
+let readSet  = (()=>{try{return new Set(JSON.parse(localStorage.getItem(READ_KEY))||[]);}catch{return new Set();}})();
+let allItems = (()=>{try{return JSON.parse(localStorage.getItem(ITEMS_KEY))||[];}catch{return [];}})();
+let filter   = 'all';
+function saveRead()  { localStorage.setItem(READ_KEY,  JSON.stringify([...readSet])); }
+function saveItems() { localStorage.setItem(ITEMS_KEY, JSON.stringify(allItems)); }
 
 // ── 全取得 ──
 async function fetchAll() {
-  const btn = document.getElementById('refresh-btn');
-  const icon = document.getElementById('refresh-icon');
-  btn.disabled = true; icon.textContent = '⏳';
-  document.getElementById('content-area').innerHTML =
+  const btn=document.getElementById('refresh-btn');
+  const icon=document.getElementById('refresh-icon');
+  btn.disabled=true; icon.textContent='⏳';
+  document.getElementById('content-area').innerHTML=
     '<div class="loading"><div class="spinner"></div><p>jw.org から新着情報を取得中…</p><p class="loading-detail" id="loading-detail"></p></div>';
 
   try {
-    const [rssItems, videoItems] = await Promise.allSettled([fetchRSS(), fetchVideos()])
-      .then(r => [
-        r[0].status === 'fulfilled' ? r[0].value : [],
-        r[1].status === 'fulfilled' ? r[1].value : [],
-      ]);
+    const [rssResult, videoResult] = await Promise.allSettled([fetchRSS(), fetchVideos()]);
+    const rssItems   = rssResult.status==='fulfilled'   ? rssResult.value   : [];
+    const videoItems = videoResult.status==='fulfilled' ? videoResult.value : [];
 
     const cutoff = sixMonthsAgo();
     const seen   = new Set();
     const merged = [];
     [...videoItems, ...rssItems].forEach(item => {
       if (!seen.has(item.id) && new Date(item.date) >= cutoff) {
-        seen.add(item.id);
-        merged.push(item);
+        seen.add(item.id); merged.push(item);
       }
     });
 
-    if (!merged.length && !rssItems.length) throw new Error('全データ取得失敗');
+    if (!merged.length) throw new Error('データが0件です');
 
-    merged.sort((a,b) => new Date(b.date) - new Date(a.date));
+    merged.sort((a,b) => new Date(b.date)-new Date(a.date));
     allItems = merged;
     saveItems();
     localStorage.setItem(TIME_KEY, Date.now());
 
     const now = new Date();
-    const videoCount = merged.filter(i => i.type === 'video').length;
+    const vCnt = merged.filter(i=>i.type==='video').length;
     document.getElementById('last-updated').textContent =
-      '最終更新: ' + now.getHours() + ':' + String(now.getMinutes()).padStart(2,'0') +
-      (videoCount ? ` (ビデオ${videoCount}件)` : ' (ビデオ取得失敗)');
+      '最終更新: '+now.getHours()+':'+String(now.getMinutes()).padStart(2,'0')+
+      ' (ビデオ'+vCnt+'件)';
     render();
 
   } catch(err) {
-    if (allItems.length > 0) {
-      render();
-      document.getElementById('last-updated').textContent = '⚠ 取得失敗 – キャッシュ表示';
-    } else {
-      document.getElementById('content-area').innerHTML =
-        '<div class="error-box"><strong>⚠️ データを取得できませんでした</strong>' +
-        'インターネット接続を確認し「新着を取得」を押してください。' +
-        '<code>' + escHtml(err.message) + '</code></div>';
+    if (allItems.length>0) { render(); document.getElementById('last-updated').textContent='⚠ 取得失敗–キャッシュ表示'; }
+    else {
+      document.getElementById('content-area').innerHTML=
+        '<div class="error-box"><strong>⚠️ データを取得できませんでした</strong>'+
+        'インターネット接続を確認し「新着を取得」を押してください。'+
+        '<code>'+escHtml(err.message)+'</code></div>';
     }
-  } finally {
-    btn.disabled = false; icon.textContent = '🔄';
-  }
+  } finally { btn.disabled=false; icon.textContent='🔄'; }
 }
 
-// ── 描画 ──
-function fmtDate(s) { const d = new Date(s); return d.getFullYear()+'年'+(d.getMonth()+1)+'月'+d.getDate()+'日'; }
-function escHtml(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// ── 描画（onclick排除・data属性方式）──
+function fmtDate(s){const d=new Date(s);return d.getFullYear()+'年'+(d.getMonth()+1)+'月'+d.getDate()+'日';}
+function escHtml(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
 function render() {
   const area   = document.getElementById('content-area');
   const cutoff = sixMonthsAgo();
-  let items    = allItems.filter(it => new Date(it.date) >= cutoff);
+  let items = allItems.filter(it => new Date(it.date) >= cutoff);
 
-  if     (filter==='unread')  items = items.filter(it => !readSet.has(it.id));
-  else if(filter==='read')    items = items.filter(it =>  readSet.has(it.id));
+  if     (filter==='unread')  items=items.filter(it=>!readSet.has(it.id));
+  else if(filter==='read')    items=items.filter(it=> readSet.has(it.id));
   else if(['video','article','magazine','song','book','other'].includes(filter))
-    items = items.filter(it => it.type === filter);
+    items=items.filter(it=>it.type===filter);
 
-  const recent = allItems.filter(it => new Date(it.date) >= cutoff);
+  const recent = allItems.filter(it=>new Date(it.date)>=cutoff);
   document.getElementById('total-count').textContent  = recent.length;
-  document.getElementById('unread-count').textContent = recent.filter(it => !readSet.has(it.id)).length;
-  document.getElementById('read-count').textContent   = recent.filter(it =>  readSet.has(it.id)).length;
+  document.getElementById('unread-count').textContent = recent.filter(it=>!readSet.has(it.id)).length;
+  document.getElementById('read-count').textContent   = recent.filter(it=> readSet.has(it.id)).length;
 
   if (!items.length) {
-    area.innerHTML = '<div class="empty-state">表示するコンテンツがありません。<br>フィルターを変更するか「新着を取得」ボタンを押してください。</div>';
+    area.innerHTML='<div class="empty-state">表示するコンテンツがありません。<br>フィルターを変更するか「新着を取得」ボタンを押してください。</div>';
     return;
   }
 
-  const groups = {};
-  items.forEach(it => { (groups[it.date] = groups[it.date]||[]).push(it); });
+  const groups={};
+  items.forEach(it=>{ (groups[it.date]=groups[it.date]||[]).push(it); });
 
-  let html = '';
-  Object.keys(groups).sort((a,b) => new Date(b)-new Date(a)).forEach(date => {
-    html += '<div class="date-header">' + fmtDate(date) + '更新</div>';
-    groups[date].forEach(it => {
-      const isRead = readSet.has(it.id);
-      const bC = TYPE_BADGE[it.type] || 'badge-other';
-      const bL = TYPE_LABEL[it.type] || 'その他';
-      const idJ = JSON.stringify(it.id);
-      html +=
-        '<div class="item ' + (isRead?'read':'') + '">' +
-        '<div class="item-inner">' +
-        '<span class="type-badge ' + bC + '">' + bL + '</span>' +
-        '<div class="item-body">' +
-        '<a href="' + escHtml(it.url) + '" class="item-title" target="_blank" onclick="markRead(' + idJ + ')">' + escHtml(it.title) + '</a>' +
-        (it.category ? '<div class="item-category">' + escHtml(it.category) + '</div>' : '') +
-        '</div>' +
-        '<div class="item-actions">' +
-        (isRead ? '<span class="read-badge">閲覧済み</span>' : '') +
-        '<button class="toggle-btn" onclick="toggleRead(' + idJ + ')">' + (isRead?'未読に戻す':'閲覧済みに') + '</button>' +
+  // HTMLを組み立て（onclickは使わずdata-id属性を使う）
+  let html='';
+  Object.keys(groups).sort((a,b)=>new Date(b)-new Date(a)).forEach(date=>{
+    html+='<div class="date-header">'+fmtDate(date)+'更新</div>';
+    groups[date].forEach(it=>{
+      const isRead=readSet.has(it.id);
+      const bC=TYPE_BADGE[it.type]||'badge-other';
+      const bL=TYPE_LABEL[it.type]||'その他';
+      // data-id属性にIDを格納（JSエスケープ不要）
+      const safeId = escHtml(it.id);
+      html+=
+        '<div class="item '+(isRead?'read':'')+'" data-id="'+safeId+'">'+
+        '<div class="item-inner">'+
+        '<span class="type-badge '+bC+'">'+bL+'</span>'+
+        '<div class="item-body">'+
+        '<a href="'+escHtml(it.url)+'" class="item-title js-title" target="_blank" data-id="'+safeId+'">'+escHtml(it.title)+'</a>'+
+        (it.category?'<div class="item-category">'+escHtml(it.category)+'</div>':'')+
+        '</div>'+
+        '<div class="item-actions">'+
+        (isRead?'<span class="read-badge">閲覧済み</span>':'')+
+        '<button class="toggle-btn js-toggle" data-id="'+safeId+'">'+(isRead?'未読に戻す':'閲覧済みに')+'</button>'+
         '</div></div></div>';
     });
   });
   area.innerHTML = html;
+
+  // イベントリスナーをコンテナに一括登録（イベント委譲）
+  area.addEventListener('click', handleClick);
 }
 
-function markRead(id)   { readSet.add(id);                          saveRead(); render(); }
-function toggleRead(id) { readSet.has(id)?readSet.delete(id):readSet.add(id); saveRead(); render(); }
+// イベント委譲ハンドラ
+function handleClick(e) {
+  // タイトルリンク → 閲覧済みにする（リンク自体のナビゲーションは妨げない）
+  const title = e.target.closest('.js-title');
+  if (title) {
+    const id = title.dataset.id;
+    if (id) { readSet.add(id); saveRead(); scheduleRender(); }
+    return; // リンクのデフォルト動作は維持
+  }
+  // 閲覧済みボタン
+  const toggle = e.target.closest('.js-toggle');
+  if (toggle) {
+    e.preventDefault();
+    const id = toggle.dataset.id;
+    if (id) { readSet.has(id)?readSet.delete(id):readSet.add(id); saveRead(); render(); }
+  }
+}
 
-document.querySelectorAll('.filter-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active'); filter = btn.dataset.filter; render();
+// タイトルクリック後、ページ離脱前に少し遅らせて再描画
+let renderTimer = null;
+function scheduleRender() {
+  clearTimeout(renderTimer);
+  renderTimer = setTimeout(render, 300);
+}
+
+document.querySelectorAll('.filter-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active'); filter=btn.dataset.filter; render();
   });
 });
 document.getElementById('refresh-btn').addEventListener('click', fetchAll);
-document.getElementById('reset-btn').addEventListener('click', () => {
-  if (confirm('閲覧済みの記録をすべてリセットしますか？')) { readSet = new Set(); saveRead(); render(); }
+document.getElementById('reset-btn').addEventListener('click',()=>{
+  if(confirm('閲覧済みの記録をすべてリセットしますか？')){readSet=new Set();saveRead();render();}
 });
 
 // ── 初期化 ──
-if (allItems.length > 0) {
+if (allItems.length>0) {
   render();
-  const t = parseInt(localStorage.getItem(TIME_KEY)||'0');
-  if (t) { const d = new Date(t); document.getElementById('last-updated').textContent = '最終更新: '+d.getHours()+':'+String(d.getMinutes()).padStart(2,'0'); }
-  if (Date.now()-t > 3_600_000) fetchAll();
+  const t=parseInt(localStorage.getItem(TIME_KEY)||'0');
+  if(t){const d=new Date(t);document.getElementById('last-updated').textContent='最終更新: '+d.getHours()+':'+String(d.getMinutes()).padStart(2,'0');}
+  if(Date.now()-t>3_600_000) fetchAll();
 } else { fetchAll(); }
 </script>
 </body>
