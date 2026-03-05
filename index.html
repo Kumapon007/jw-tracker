@@ -192,9 +192,11 @@ async function fetchViaProxy(targetUrl, label) {
   throw new Error((label || targetUrl) + ': 全プロキシ失敗');
 }
 
-// ── ビデオURLは全てビデオトップページに固定 ──
-function makeVideoUrl() {
-  return 'https://www.jw.org/ja/%E3%83%A9%E3%82%A4%E3%83%96%E3%83%A9%E3%83%AA%E3%83%BC/%E3%83%93%E3%83%87%E3%82%AA/?appLanguage=J#ja/home';
+// ── ビデオURL生成 ──
+// languageAgnosticNaturalKey を lank パラメータに使用（シェアリンクと同じ形式）
+function makeVideoUrl(lankKey) {
+  if (!lankKey) return 'https://www.jw.org/finder?wtlocale=J&docid=1011267&srcid=share';
+  return 'https://www.jw.org/finder?srcid=share&wtlocale=J&lank=' + lankKey;
 }
 
 // ── ビデオAPI取得 ──
@@ -219,11 +221,13 @@ async function fetchVideos() {
       const dateObj = m.firstPublished ? new Date(m.firstPublished) : null;
       if (!dateObj || dateObj < sixAgo) return;
       seen.add(key);
+      // languageAgnosticNaturalKey = 言語コードなし版（シェアリンクのlankと同じ）
+      const lankKey = m.languageAgnosticNaturalKey || m.naturalKey;
       results.push({
         id:       'vid_' + key,
         title:    m.title || '（タイトルなし）',
         category: c.name || 'ビデオ',
-        url:      makeVideoUrl(m.naturalKey),   // naturalKey をそのまま使用
+        url:      makeVideoUrl(lankKey),
         duration: m.durationFormattedHHMM || '',
         date:     toDateStr(dateObj),
         dateObj,
