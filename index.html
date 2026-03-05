@@ -142,8 +142,10 @@ async function fetchViaProxy(targetUrl, label) {
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const text = await res.text();
       if (!text || text.length < 5) throw new Error('空');
-      if (text.trim().startsWith('{')) {
-        try { const j = JSON.parse(text); return j.contents || text; } catch {}
+      // allorigins /get はJSONラッパー {"contents":"..."} で返す
+      // allorigins /raw や corsproxy は直接内容を返す
+      if (text.trim().startsWith('{"contents"')) {
+        try { const j = JSON.parse(text); if (j.contents) return j.contents; } catch {}
       }
       return text;
     } catch {}
