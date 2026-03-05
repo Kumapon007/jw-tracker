@@ -10,7 +10,6 @@
     --bg:#f5f0e8; --surface:#fffdf8; --surface2:#ede8dc;
     --accent:#1a4a7a; --accent2:#c8a84b;
     --text:#1a1a1a; --text-muted:#6b6560; --read-color:#a09890;
-    --video-color:#1a4a7a; --article-color:#3a7a4a;
     --border:#ddd8cc; --shadow:0 2px 12px rgba(0,0,0,0.07);
   }
   *{margin:0;padding:0;box-sizing:border-box;}
@@ -18,10 +17,10 @@
   header{background:var(--accent);color:white;padding:24px 20px 18px;text-align:center;position:sticky;top:0;z-index:100;box-shadow:0 3px 20px rgba(26,74,122,0.4);}
   header h1{font-family:'Noto Serif JP',serif;font-size:1.35rem;font-weight:600;letter-spacing:0.08em;margin-bottom:4px;}
   header p{font-size:0.75rem;opacity:0.7;letter-spacing:0.04em;}
-  .stats-bar{background:var(--accent2);padding:8px 20px;display:flex;justify-content:center;gap:24px;font-size:0.77rem;font-weight:500;color:#3a2800;flex-wrap:wrap;}
+  .stats-bar{background:var(--accent2);padding:8px 20px;display:flex;justify-content:center;gap:20px;font-size:0.77rem;font-weight:500;color:#3a2800;flex-wrap:wrap;}
   .stats-bar span{display:flex;align-items:center;gap:4px;}
-  .filter-row{background:var(--surface);padding:10px 14px;display:flex;gap:7px;flex-wrap:wrap;border-bottom:1px solid var(--border);justify-content:center;}
-  .filter-btn{padding:5px 14px;border-radius:20px;border:1.5px solid var(--border);background:transparent;font-family:'Noto Sans JP',sans-serif;font-size:0.76rem;cursor:pointer;color:var(--text-muted);transition:all 0.18s;}
+  .filter-row{background:var(--surface);padding:10px 14px;display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--border);justify-content:center;}
+  .filter-btn{padding:5px 12px;border-radius:20px;border:1.5px solid var(--border);background:transparent;font-family:'Noto Sans JP',sans-serif;font-size:0.74rem;cursor:pointer;color:var(--text-muted);transition:all 0.18s;}
   .filter-btn.active{background:var(--accent);border-color:var(--accent);color:white;}
   .filter-btn:hover:not(.active){border-color:var(--accent);color:var(--accent);}
   main{max-width:680px;margin:0 auto;padding:14px 13px;}
@@ -46,9 +45,14 @@
   .item.read{background:var(--surface2);border-color:#d8d2c6;box-shadow:none;opacity:0.68;}
   .item.read:hover{opacity:0.85;transform:none;}
   .item-inner{padding:13px 15px;display:flex;align-items:flex-start;gap:11px;}
+  /* バッジカラー: type別 */
   .type-badge{flex-shrink:0;padding:2px 9px;border-radius:4px;font-size:0.68rem;font-weight:500;margin-top:3px;white-space:nowrap;}
-  .badge-video{background:rgba(26,74,122,0.1);color:var(--video-color);border:1px solid rgba(26,74,122,0.2);}
-  .badge-article{background:rgba(58,122,74,0.1);color:var(--article-color);border:1px solid rgba(58,122,74,0.2);}
+  .badge-video   {background:rgba(26,74,122,0.12);  color:#1a4a7a; border:1px solid rgba(26,74,122,0.25);}
+  .badge-article {background:rgba(58,122,74,0.12);  color:#2a6a3a; border:1px solid rgba(58,122,74,0.25);}
+  .badge-magazine{background:rgba(160,80,20,0.12);  color:#8a4010; border:1px solid rgba(160,80,20,0.25);}
+  .badge-song    {background:rgba(120,40,120,0.12); color:#6a2070; border:1px solid rgba(120,40,120,0.25);}
+  .badge-book    {background:rgba(20,100,140,0.12); color:#145a80; border:1px solid rgba(20,100,140,0.25);}
+  .badge-other   {background:rgba(100,100,100,0.1); color:#555;    border:1px solid rgba(100,100,100,0.2);}
   .item-body{flex:1;min-width:0;}
   .item-title{display:block;font-size:0.93rem;font-weight:500;color:var(--accent);text-decoration:none;line-height:1.5;word-break:break-all;transition:color 0.18s;}
   .item.read .item-title{color:var(--read-color);text-decoration:line-through;text-decoration-color:var(--read-color);}
@@ -80,6 +84,9 @@
   <button class="filter-btn" data-filter="unread">未閲覧のみ</button>
   <button class="filter-btn" data-filter="video">ビデオ</button>
   <button class="filter-btn" data-filter="article">記事</button>
+  <button class="filter-btn" data-filter="magazine">雑誌</button>
+  <button class="filter-btn" data-filter="song">音楽</button>
+  <button class="filter-btn" data-filter="book">書籍</button>
   <button class="filter-btn" data-filter="read">閲覧済み</button>
 </div>
 <main>
@@ -96,86 +103,90 @@
 </main>
 
 <script>
-const READ_KEY  = 'jw_read_v6';
-const ITEMS_KEY = 'jw_items_v6';
-const TIME_KEY  = 'jw_time_v6';
+const READ_KEY  = 'jw_read_v7';
+const ITEMS_KEY = 'jw_items_v7';
+const TIME_KEY  = 'jw_time_v7';
 
-// ── フィード定義 ──
-// 日本語RSSを優先、失敗時は英語RSSにフォールバック
-const FEED_GROUPS = [
-  {
-    type: 'article',
-    urls: [
-      // 日本語版（%エンコード済みパスをそのまま使用）
-      'https://www.jw.org/ja/%E6%96%B0%E7%9D%80%E6%83%85%E5%A0%B1/rss/WhatsNewWebArticles/feed.xml',
-      // 英語版フォールバック
-      'https://www.jw.org/en/whats-new/rss/WhatsNewWebArticles/feed.xml',
-    ]
-  },
-  {
-    type: 'video',
-    urls: [
-      'https://www.jw.org/ja/%E6%96%B0%E7%9D%80%E6%83%85%E5%A0%B1/rss/WhatsNewVideos/feed.xml',
-      'https://www.jw.org/en/whats-new/rss/WhatsNewVideos/feed.xml',
-    ]
-  },
+// ── 日本語・英語RSSを順に試す（1本のフィードに全コンテンツが入っている）──
+const FEED_URLS = [
+  'https://www.jw.org/ja/%E6%96%B0%E7%9D%80%E6%83%85%E5%A0%B1/rss/WhatsNewWebArticles/feed.xml',
+  'https://www.jw.org/en/whats-new/rss/WhatsNewWebArticles/feed.xml',
 ];
 
-// ── CORSプロキシ ──
-// allorigins は /raw? でURLをそのまま渡す（再エンコード禁止）
-function makeProxyUrl(targetUrl) {
-  // %記号自体をエンコードしないよう、手動で組み立てる
-  return 'https://api.allorigins.win/raw?url=' + targetUrl.replace(/&/g,'%26');
-}
-function makeProxyUrl2(targetUrl) {
-  return 'https://corsproxy.io/?url=' + targetUrl.replace(/&/g,'%26');
-}
-function makeProxyUrl3(targetUrl) {
-  return 'https://api.allorigins.win/get?url=' + targetUrl.replace(/&/g,'%26');
-}
+// ── CORSプロキシ（URLを再エンコードしない） ──
+function proxy1(u){ return 'https://api.allorigins.win/raw?url=' + u; }
+function proxy2(u){ return 'https://corsproxy.io/?url='          + u; }
+function proxy3(u){ return 'https://api.allorigins.win/get?url=' + u; }
 
-async function tryFetch(proxyUrl) {
-  const res = await fetch(proxyUrl, { cache: 'no-cache' });
+async function tryProxy(proxyFn, targetUrl) {
+  const res = await fetch(proxyFn(targetUrl), { cache:'no-cache' });
   if (!res.ok) throw new Error('HTTP ' + res.status);
   const text = await res.text();
-  if (!text || text.trim().length < 50) throw new Error('空レスポンス');
-  // allorigins /get は JSON ラッパー
+  if (!text || text.length < 50) throw new Error('空レスポンス');
+  // allorigins /get はJSONラッパー
   if (text.trim().startsWith('{')) {
-    try { const j = JSON.parse(text); return j.contents || text; } catch {}
+    try { const j=JSON.parse(text); return j.contents || text; } catch {}
   }
   return text;
 }
 
-// ── 1つのフィードURLを複数プロキシで試す ──
-async function fetchOneUrl(url, label) {
-  const proxies = [makeProxyUrl, makeProxyUrl2, makeProxyUrl3];
-  let lastErr;
-  for (let i = 0; i < proxies.length; i++) {
-    setDetail(label + ` (プロキシ${i+1}/3試行中…)`);
+async function fetchXml(targetUrl, label) {
+  const proxies = [proxy1, proxy2, proxy3];
+  for (let i=0; i<proxies.length; i++) {
+    setDetail(label + `（プロキシ${i+1}/3）`);
     try {
-      const xml = await tryFetch(proxies[i](url));
-      if (!xml.includes('<item>') && !xml.includes('<item ')) throw new Error('itemタグなし');
-      return xml;
-    } catch(e) { lastErr = e; }
+      const xml = await tryProxy(proxies[i], targetUrl);
+      if (xml.includes('<item>') || xml.includes('<item ')) return xml;
+      throw new Error('itemなし');
+    } catch(e) { /* 次を試す */ }
   }
-  throw lastErr || new Error('全プロキシ失敗');
+  throw new Error(label + ' 全プロキシ失敗');
 }
 
-// ── フィードグループを試す（日本語→英語フォールバック） ──
-async function fetchFeedGroup(group) {
-  let lastErr;
-  for (const url of group.urls) {
+async function fetchFeed() {
+  for (const url of FEED_URLS) {
     const isJa = url.includes('/ja/');
     try {
-      const xml = await fetchOneUrl(url, isJa ? '日本語RSS' : '英語RSS（代替）');
+      const xml = await fetchXml(url, isJa ? '日本語RSS' : '英語RSS');
       return { xml, isJa };
-    } catch(e) { lastErr = e; }
+    } catch(e) { /* 次のURLを試す */ }
   }
-  throw lastErr || new Error('フィード取得失敗');
+  throw new Error('全フィードURL失敗');
 }
 
+// ── カテゴリ判別（英語/日本語のカテゴリ文字列から） ──
+function classifyType(category, url) {
+  const c = (category || '').toUpperCase();
+  const u = (url || '').toLowerCase();
+  if (c.includes('VIDEO') || c.includes('ビデオ') || c.includes('DRAMA') || c.includes('ドラマ') ||
+      c.includes('SONG') || c.includes('音楽') || c.includes('MUSIC') ||
+      u.includes('/videos/') || u.includes('/music-songs/') || u.includes('/drama/')) {
+    if (c.includes('SONG') || c.includes('音楽') || c.includes('MUSIC') || u.includes('/music-songs/')) return 'song';
+    return 'video';
+  }
+  if (c.includes('WATCHTOWER') || c.includes('ものみの塔') || c.includes('AWAKE') || c.includes('目ざめよ') ||
+      c.includes('MAGAZINE') || c.includes('雑誌') || c.includes('MEETING WORKBOOK') || c.includes('集会テキスト') ||
+      u.includes('/magazines/') || u.includes('/watchtower') || u.includes('/awake') || u.includes('mwb')) {
+    return 'magazine';
+  }
+  if (c.includes('BROCHURE') || c.includes('BOOKLET') || c.includes('パンフレット') ||
+      c.includes('BOOK') || c.includes('本') || c.includes('BIBLE') || c.includes('聖書') ||
+      u.includes('/books/') || u.includes('/brochures/') || u.includes('/bible/')) {
+    return 'book';
+  }
+  if (c.includes('NEWS') || c.includes('ニュース') || c.includes('ARTICLE') || c.includes('記事') ||
+      c.includes('RELEASE') || c.includes('リリース') || c.includes('KEEP ON THE WATCH') ||
+      u.includes('/news/') || u.includes('/library/')) {
+    return 'article';
+  }
+  return 'other';
+}
+
+const TYPE_LABEL = { video:'ビデオ', article:'記事', magazine:'雑誌', song:'音楽', book:'書籍', other:'その他' };
+const TYPE_BADGE = { video:'badge-video', article:'badge-article', magazine:'badge-magazine', song:'badge-song', book:'badge-book', other:'badge-other' };
+
 // ── XMLパーサ ──
-function parseRSS(xml, type, isJa) {
+function parseRSS(xml, isJa) {
   const parser = new DOMParser();
   const doc = parser.parseFromString(xml, 'application/xml');
   if (doc.querySelector('parsererror')) throw new Error('XMLパースエラー');
@@ -188,26 +199,28 @@ function parseRSS(xml, type, isJa) {
                   || el.querySelector('guid')?.textContent?.trim() || '';
     const pubDate  = el.querySelector('pubDate')?.textContent?.trim() || '';
     const dateObj  = pubDate ? new Date(pubDate) : new Date();
-    const dateStr  = dateObj.getFullYear() + '-' +
-                     String(dateObj.getMonth()+1).padStart(2,'0') + '-' +
-                     String(dateObj.getDate()).padStart(2,'0');
+    const dateStr  = dateObj.getFullYear() + '-'
+                   + String(dateObj.getMonth()+1).padStart(2,'0') + '-'
+                   + String(dateObj.getDate()).padStart(2,'0');
 
-    // 「CATEGORY | Title」形式を分割
-    const parts    = rawTitle.split(' | ');
-    const category = parts.length > 1 ? parts[0] : '';
-    const title    = parts.length > 1 ? parts.slice(1).join(' | ') : rawTitle;
+    // 「カテゴリ | タイトル」を分割
+    const sep   = rawTitle.indexOf(' | ');
+    const category = sep > -1 ? rawTitle.slice(0, sep) : '';
+    const title    = sep > -1 ? rawTitle.slice(sep + 3) : rawTitle;
 
-    // 英語版URLを日本語版に変換（フォールバック時）
+    // 英語URLを日本語URLに変換
     const url = (!isJa && rawLink)
       ? rawLink.replace('https://www.jw.org/en/', 'https://www.jw.org/ja/')
       : rawLink;
+
+    const type = classifyType(category, url);
 
     return { id: rawLink || rawTitle, title, category, url, date: dateStr, dateObj, type };
   });
 }
 
-function sixMonthsAgo() { const d=new Date(); d.setMonth(d.getMonth()-6); return d; }
-function setDetail(t) { const el=document.getElementById('loading-detail'); if(el) el.textContent=t; }
+function sixMonthsAgo(){ const d=new Date(); d.setMonth(d.getMonth()-6); return d; }
+function setDetail(t){ const el=document.getElementById('loading-detail'); if(el) el.textContent=t; }
 
 // ── 状態 ──
 let readSet  = (()=>{ try{return new Set(JSON.parse(localStorage.getItem(READ_KEY))||[]);}catch{return new Set();}})();
@@ -216,7 +229,7 @@ let filter   = 'all';
 function saveRead()  { localStorage.setItem(READ_KEY,  JSON.stringify([...readSet])); }
 function saveItems() { localStorage.setItem(ITEMS_KEY, JSON.stringify(allItems)); }
 
-// ── 全フィード取得 ──
+// ── 取得 ──
 async function fetchAll() {
   const btn=document.getElementById('refresh-btn');
   const icon=document.getElementById('refresh-icon');
@@ -225,43 +238,18 @@ async function fetchAll() {
     '<div class="loading"><div class="spinner"></div><p>jw.org から新着情報を取得中…</p><p class="loading-detail" id="loading-detail"></p></div>';
 
   try {
-    const results = await Promise.allSettled(
-      FEED_GROUPS.map(async group => {
-        const { xml, isJa } = await fetchFeedGroup(group);
-        return parseRSS(xml, group.type, isJa);
-      })
-    );
-
+    const { xml, isJa } = await fetchFeed();
+    const items = parseRSS(xml, isJa);
     const cutoff = sixMonthsAgo();
-    const seen   = new Set();
-    const merged = [];
-
-    results.forEach(r => {
-      if (r.status==='fulfilled') {
-        r.value.forEach(item => {
-          if (!seen.has(item.id) && item.dateObj >= cutoff) {
-            seen.add(item.id); merged.push(item);
-          }
-        });
-      }
-    });
-
-    if (results.every(r=>r.status==='rejected')) {
-      throw new Error(results.map(r=>r.reason?.message).filter(Boolean).join('\n'));
-    }
-
-    merged.sort((a,b) => b.dateObj - a.dateObj);
-    allItems = merged;
+    allItems = items.filter(it => it.dateObj >= cutoff);
+    allItems.sort((a,b) => b.dateObj - a.dateObj);
     saveItems();
     localStorage.setItem(TIME_KEY, Date.now());
-
     const now=new Date();
-    const failCount = results.filter(r=>r.status==='rejected').length;
     document.getElementById('last-updated').textContent =
       '最終更新: '+now.getHours()+':'+String(now.getMinutes()).padStart(2,'0') +
-      (failCount > 0 ? ' ⚠一部取得失敗' : '');
+      (isJa ? '' : ' (英語RSSを使用)');
     render();
-
   } catch(err) {
     if (allItems.length > 0) {
       render();
@@ -285,10 +273,11 @@ function render(){
   const area=document.getElementById('content-area');
   const cutoff=sixMonthsAgo();
   let items=allItems.filter(it=>new Date(it.date)>=cutoff);
+
   if     (filter==='unread')  items=items.filter(it=>!readSet.has(it.id));
   else if(filter==='read')    items=items.filter(it=> readSet.has(it.id));
-  else if(filter==='video')   items=items.filter(it=>it.type==='video');
-  else if(filter==='article') items=items.filter(it=>it.type==='article');
+  else if(['video','article','magazine','song','book','other'].includes(filter))
+    items=items.filter(it=>it.type===filter);
 
   const recent=allItems.filter(it=>new Date(it.date)>=cutoff);
   document.getElementById('total-count').textContent  = recent.length;
@@ -308,8 +297,8 @@ function render(){
     html+='<div class="date-header">'+fmtDate(date)+'更新</div>';
     groups[date].forEach(it=>{
       const isRead=readSet.has(it.id);
-      const bC=it.type==='video'?'badge-video':'badge-article';
-      const bL=it.type==='video'?'ビデオ':'記事';
+      const bC=TYPE_BADGE[it.type]||'badge-other';
+      const bL=TYPE_LABEL[it.type]||'その他';
       const idJ=JSON.stringify(it.id);
       html+=
         '<div class="item '+(isRead?'read':'')+'">' +
