@@ -65,6 +65,20 @@
   .toggle-btn:hover{border-color:var(--accent);color:var(--accent);}
   .empty-state{text-align:center;padding:45px 20px;color:var(--text-muted);font-size:0.85rem;line-height:1.8;}
   @keyframes fadeIn{from{opacity:0;transform:translateY(5px);}to{opacity:1;transform:translateY(0);}}
+  .add-video-btn{background:var(--accent2);color:#3a2800;border:none;border-radius:7px;padding:7px 14px;font-family:'Noto Sans JP',sans-serif;font-size:0.76rem;cursor:pointer;display:flex;align-items:center;gap:5px;transition:all 0.2s;font-weight:500;}
+  .add-video-btn:hover{background:#b8980a;}
+  .add-panel{background:var(--surface);border:2px solid var(--accent2);border-radius:12px;padding:16px;margin-bottom:12px;display:none;}
+  .add-panel h3{font-family:'Noto Serif JP',serif;font-size:0.88rem;color:var(--accent);margin-bottom:12px;}
+  .add-row{display:flex;gap:7px;margin-bottom:8px;flex-wrap:wrap;}
+  .add-row input,.add-row select{font-family:'Noto Sans JP',sans-serif;font-size:0.8rem;padding:7px 10px;border:1px solid var(--border);border-radius:7px;background:var(--bg);color:var(--text);outline:none;transition:border-color 0.2s;flex:1;min-width:140px;}
+  .add-row input:focus{border-color:var(--accent);}
+  .add-row input[type=date]{flex:0 0 auto;width:140px;}
+  .do-add-btn{background:var(--accent);color:white;border:none;border-radius:7px;padding:7px 16px;font-family:'Noto Sans JP',sans-serif;font-size:0.8rem;cursor:pointer;white-space:nowrap;}
+  .do-add-btn:hover{background:#163f68;}
+  .add-hint{font-size:0.7rem;color:var(--text-muted);margin-top:4px;}
+  .badge-manual{background:rgba(200,168,75,0.15);color:#7a5800;border:1px solid rgba(200,168,75,0.35);}
+  .del-btn{background:none;border:none;padding:3px 5px;cursor:pointer;font-size:0.75rem;color:#ccc;transition:color 0.18s;line-height:1;}
+  .del-btn:hover{color:#cc5555;}
   ::-webkit-scrollbar{width:5px;}
   ::-webkit-scrollbar-track{background:var(--bg);}
   ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
@@ -89,14 +103,38 @@
   <button class="filter-btn" data-filter="song">音楽</button>
   <button class="filter-btn" data-filter="book">書籍</button>
   <button class="filter-btn" data-filter="read">閲覧済み</button>
+  <button class="filter-btn" data-filter="manual">手動追加</button>
 </div>
 <main>
   <div class="toolbar">
     <div class="btn-group">
       <button class="refresh-btn" id="refresh-btn"><span id="refresh-icon">🔄</span> 新着を取得</button>
+      <button class="add-video-btn" id="toggle-add-btn">＋ 手動追加</button>
       <span class="last-updated" id="last-updated"></span>
     </div>
     <button class="reset-btn" id="reset-btn">閲覧履歴をリセット</button>
+  </div>
+  <!-- 手動追加パネル -->
+  <div class="add-panel" id="add-panel">
+    <h3>▶ コンテンツを手動で追加</h3>
+    <div class="add-row">
+      <input type="text" id="add-title" placeholder="タイトル（例：JW Broadcasting 2026年3月）">
+    </div>
+    <div class="add-row">
+      <input type="url" id="add-url" placeholder="URL">
+      <input type="date" id="add-date">
+    </div>
+    <div class="add-row">
+      <select id="add-type">
+        <option value="video">ビデオ</option>
+        <option value="article">記事</option>
+        <option value="magazine">雑誌</option>
+        <option value="song">音楽</option>
+        <option value="book">書籍</option>
+      </select>
+      <button class="do-add-btn" id="do-add-btn">追加する</button>
+    </div>
+    <p class="add-hint">💡 タイトルとURLを入力して追加してください</p>
   </div>
   <div id="content-area">
     <div class="loading"><div class="spinner"></div><p>jw.org から新着情報を取得中…</p><p class="loading-detail" id="loading-detail"></p></div>
@@ -104,7 +142,8 @@
 </main>
 
 <script>
-const READ_KEY  = 'jw_read_v11';
+const READ_KEY   = 'jw_read_v11';
+const MANUAL_KEY = 'jw_manual_v11';
 const ITEMS_KEY = 'jw_items_v11';
 const TIME_KEY  = 'jw_time_v11';
 
@@ -153,11 +192,9 @@ async function fetchViaProxy(targetUrl, label) {
   throw new Error((label || targetUrl) + ': 全プロキシ失敗');
 }
 
-// ── ビデオURLを生成 ──
-// naturalKey（例: "pub-jwb-135_J_1_VIDEO"）をそのままlankパラメータに使う
-function makeVideoUrl(naturalKey) {
-  if (!naturalKey) return 'https://www.jw.org/ja/%E3%83%A9%E3%82%A4%E3%83%96%E3%83%A9%E3%83%AA%E3%83%BC/%E3%83%93%E3%83%87%E3%82%AA/';
-  return 'https://www.jw.org/finder?wtlocale=J&lank=' + naturalKey;
+// ── ビデオURLは全てビデオトップページに固定 ──
+function makeVideoUrl() {
+  return 'https://www.jw.org/ja/%E3%83%A9%E3%82%A4%E3%83%96%E3%83%A9%E3%83%AA%E3%83%BC/%E3%83%93%E3%83%87%E3%82%AA/?appLanguage=J#ja/home';
 }
 
 // ── ビデオAPI取得 ──
@@ -214,7 +251,7 @@ async function fetchVideos() {
 
 // ── RSS パーサ ──
 const TYPE_LABEL = { video:'ビデオ', article:'記事', magazine:'雑誌', song:'音楽', book:'書籍', other:'その他' };
-const TYPE_BADGE = { video:'badge-video', article:'badge-article', magazine:'badge-magazine', song:'badge-song', book:'badge-book', other:'badge-other' };
+const TYPE_BADGE = { video:'badge-video', article:'badge-article', magazine:'badge-magazine', song:'badge-song', book:'badge-book', other:'badge-other', manual:'badge-manual' };
 
 function classifyType(cat, url) {
   const c = (cat||'').toUpperCase(), u = (url||'').toLowerCase();
@@ -262,10 +299,12 @@ function setDetail(t) { const el=document.getElementById('loading-detail'); if(e
 
 // ── 状態 ──
 let readSet  = (()=>{try{return new Set(JSON.parse(localStorage.getItem(READ_KEY))||[]);}catch{return new Set();}})();
-let allItems = (()=>{try{return JSON.parse(localStorage.getItem(ITEMS_KEY))||[];}catch{return [];}})();
+let allItems   = (()=>{try{return JSON.parse(localStorage.getItem(ITEMS_KEY))||[];}catch{return [];}})();
+let manualItems= (()=>{try{return JSON.parse(localStorage.getItem(MANUAL_KEY))||[];}catch{return [];}})();
 let filter   = 'all';
 function saveRead()  { localStorage.setItem(READ_KEY,  JSON.stringify([...readSet])); }
-function saveItems() { localStorage.setItem(ITEMS_KEY, JSON.stringify(allItems)); }
+function saveItems()  { localStorage.setItem(ITEMS_KEY,  JSON.stringify(allItems)); }
+function saveManual() { localStorage.setItem(MANUAL_KEY, JSON.stringify(manualItems)); }
 
 // ── 全取得 ──
 async function fetchAll() {
@@ -321,14 +360,21 @@ function escHtml(s){return(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').rep
 function render() {
   const area   = document.getElementById('content-area');
   const cutoff = sixMonthsAgo();
-  let items = allItems.filter(it => new Date(it.date) >= cutoff);
+  // manualItemsとallItemsをマージ（重複除去）
+  const seenIds = new Set();
+  const combined = [...manualItems, ...allItems].filter(it => {
+    if (seenIds.has(it.id)) return false;
+    seenIds.add(it.id); return true;
+  }).filter(it => new Date(it.date) >= cutoff);
+  let items = combined;
 
   if     (filter==='unread')  items=items.filter(it=>!readSet.has(it.id));
   else if(filter==='read')    items=items.filter(it=> readSet.has(it.id));
+  else if(filter==='manual')  items=items.filter(it=>it.manual);
   else if(['video','article','magazine','song','book','other'].includes(filter))
     items=items.filter(it=>it.type===filter);
 
-  const recent = allItems.filter(it=>new Date(it.date)>=cutoff);
+  const recent = combined;
   document.getElementById('total-count').textContent  = recent.length;
   document.getElementById('unread-count').textContent = recent.filter(it=>!readSet.has(it.id)).length;
   document.getElementById('read-count').textContent   = recent.filter(it=> readSet.has(it.id)).length;
@@ -346,8 +392,8 @@ function render() {
     html+='<div class="date-header">'+fmtDate(date)+'更新</div>';
     groups[date].forEach(it=>{
       const isRead=readSet.has(it.id);
-      const bC=TYPE_BADGE[it.type]||'badge-other';
-      const bL=TYPE_LABEL[it.type]||'その他';
+      const bC=it.manual?'badge-manual':(TYPE_BADGE[it.type]||'badge-other');
+      const bL=it.manual?'★手動':(TYPE_LABEL[it.type]||'その他');
       const safeId=escHtml(it.id);
       html+=
         '<div class="item '+(isRead?'read':'')+'" data-id="'+safeId+'">'+
@@ -361,6 +407,7 @@ function render() {
         '<div class="item-actions">'+
         (isRead?'<span class="read-badge">閲覧済み</span>':'')+
         '<button class="toggle-btn js-toggle" data-id="'+safeId+'">'+(isRead?'未読に戻す':'閲覧済みに')+'</button>'+
+        (it.manual?'<button class="del-btn js-del" data-id="'+safeId+'" title="削除">✕</button>':'')+
         '</div></div></div>';
     });
   });
@@ -381,6 +428,15 @@ function handleClick(e) {
     const id = toggle.dataset.id;
     if (id) { readSet.has(id)?readSet.delete(id):readSet.add(id); saveRead(); render(); }
   }
+  const del = e.target.closest('.js-del');
+  if (del) {
+    e.preventDefault();
+    const id = del.dataset.id;
+    if (id && confirm('このアイテムを削除しますか？')) {
+      manualItems = manualItems.filter(it => it.id !== id);
+      saveManual(); render();
+    }
+  }
 }
 
 document.querySelectorAll('.filter-btn').forEach(btn=>{
@@ -392,6 +448,37 @@ document.querySelectorAll('.filter-btn').forEach(btn=>{
 document.getElementById('refresh-btn').addEventListener('click', fetchAll);
 document.getElementById('reset-btn').addEventListener('click',()=>{
   if(confirm('閲覧済みの記録をすべてリセットしますか？')){readSet=new Set();saveRead();render();}
+});
+
+// ── 手動追加 ──
+document.getElementById('toggle-add-btn').addEventListener('click', () => {
+  const p = document.getElementById('add-panel');
+  const open = p.style.display === 'block';
+  p.style.display = open ? 'none' : 'block';
+  document.getElementById('toggle-add-btn').textContent = open ? '＋ 手動追加' : '✕ 閉じる';
+  if (!open) document.getElementById('add-date').value = new Date().toISOString().split('T')[0];
+});
+
+document.getElementById('do-add-btn').addEventListener('click', () => {
+  const title = document.getElementById('add-title').value.trim();
+  const url   = document.getElementById('add-url').value.trim();
+  const date  = document.getElementById('add-date').value;
+  const type  = document.getElementById('add-type').value;
+  if (!title) { alert('タイトルを入力してください'); return; }
+  if (!url)   { alert('URLを入力してください'); return; }
+  if (!date)  { alert('日付を選択してください'); return; }
+  manualItems.unshift({
+    id: 'manual_' + Date.now(),
+    title, url, date,
+    dateObj: new Date(date).toISOString(),
+    category: '', duration: '', type, manual: true
+  });
+  saveManual();
+  document.getElementById('add-title').value = '';
+  document.getElementById('add-url').value = '';
+  document.getElementById('add-panel').style.display = 'none';
+  document.getElementById('toggle-add-btn').textContent = '＋ 手動追加';
+  render();
 });
 
 // ── 初期化 ──
