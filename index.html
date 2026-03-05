@@ -155,15 +155,21 @@ const RSS_URLS = [
 // ビデオAPIのベースURL（言語コードJ = 日本語）
 const VIDEO_API_BASE = 'https://data.jw-api.org/mediator/v1/categories/J/';
 // 取得するサブカテゴリ一覧（VODStudioのサブカテゴリ）
-const VIDEO_SUBCATS = [
-  'VODStudio',           // 全体（おすすめ等含む）
-  'StudioMonthlyPrograms',
-  'StudioTalks',
-  'StudioDramaAndMovies',
-  'StudioDocumentaries',
-  'StudioAudioDrama',
-  'StudioMusicVideos',
-  'StudioInternational',
+// VODStudio配下 + それ以外の主要カテゴリも追加取得
+// VODStudio配下のdetailed=1では JWORGExclude タグ付きが省略される場合があるため
+// 各カテゴリを直接取得して補完する
+const EXTRA_CATS = [
+  'VODPgmEvtMorningWorship',  // モーニングワーシップ
+  'StudioTalks',              // 講話（JWORGExclude含む）
+  'StudioMonthlyPrograms',    // マンスリープログラム
+  'StudioDramaAndMovies',     // ドラマ・映画
+  'StudioDocumentaries',      // ドキュメンタリー
+  'StudioMusicVideos',        // 音楽ビデオ
+  'VODInterview',
+  'VODMinistryTools',
+  'VODOurActivities',
+  'VODPeople',
+  'VODBibleTeachings',
 ];
 
 // CORSプロキシ（URLを再エンコードしない）
@@ -239,10 +245,20 @@ async function fetchVideos() {
 
   if (topData.category) extractMedia(topData.category);
 
-  // サブカテゴリを個別取得して補完
+  // VODStudio配下のサブカテゴリを個別取得して補完
   const subKeys = (topData.category?.subcategories || []).map(s => s.key).filter(Boolean);
   for (const key of subKeys) {
     setDetail(`ビデオ「${key}」補完取得中…`);
+    try {
+      const text = await fetchViaProxy(VIDEO_API_BASE + key + '?detailed=1', key);
+      const json = JSON.parse(text);
+      if (json.category) extractMedia(json.category);
+    } catch {}
+  }
+
+  // VODStudio以外の追加カテゴリも取得（JWORGExcludeタグのビデオを含む）
+  for (const key of EXTRA_CATS) {
+    setDetail(`追加カテゴリ「${key}」取得中…`);
     try {
       const text = await fetchViaProxy(VIDEO_API_BASE + key + '?detailed=1', key);
       const json = JSON.parse(text);
@@ -298,7 +314,7 @@ async function fetchRSS() {
 function toDateStr(d) {
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
 }
-function sixMonthsAgo() { const d=new Date(); d.setMonth(d.getMonth()-6); return d; }
+function sixMonthsAgo() { const d=new Date(); d.setFullYear(d.getFullYear()-10); return d; } // 実質制限なし
 function setDetail(t) { const el=document.getElementById('loading-detail'); if(el) el.textContent=t; }
 
 // ── 状態 ──
@@ -323,11 +339,10 @@ async function fetchAll() {
     const rssItems   = rssResult.status==='fulfilled'   ? rssResult.value   : [];
     const videoItems = videoResult.status==='fulfilled' ? videoResult.value : [];
 
-    const cutoff = sixMonthsAgo();
     const seen   = new Set();
     const merged = [];
     [...videoItems, ...rssItems].forEach(item => {
-      if (!seen.has(item.id) && new Date(item.date) >= cutoff) {
+      if (!seen.has(item.id)) {
         seen.add(item.id); merged.push(item);
       }
     });
