@@ -177,7 +177,7 @@ const TIME_KEY  = 'jw_time_v11';
 
 const RSS_URLS = [
   'https://www.jw.org/ja/%E6%96%B0%E7%9D%80%E6%83%85%E5%A0%B1/rss/WhatsNewWebArticles/feed.xml',
-  'https://www.jw.org/en/whats-new/rss/WhatsNewWebArticles/feed.xml',
+  // 英語RSSは除外（英語記事混入防止）
 ];
 
 // ビデオAPIのベースURL（言語コードJ = 日本語）
@@ -648,6 +648,11 @@ document.getElementById('do-add-btn').addEventListener('click', () => {
 });
 
 // ── 初期化：自動取得なし。キャッシュがあればそのまま表示 ──
+// 英語記事がキャッシュに混入していた場合は除去
+const beforeCount = allItems.length;
+allItems = allItems.filter(it => !it.url || !it.url.includes('www.jw.org/en/'));
+if (allItems.length !== beforeCount) saveItems();
+
 if (allItems.length > 0) {
   const t = parseInt(localStorage.getItem(TIME_KEY)||'0');
   if (t) {
